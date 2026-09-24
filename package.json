@@ -10,9 +10,17 @@
     "astroturf",
     "authenticity"
   ],
+  "author": "Lucas Kopietz",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lkopietz3-byte/trust-core.git"
+  },
+  "homepage": "https://github.com/lkopietz3-byte/trust-core#readme",
+  "bugs": {
+    "url": "https://github.com/lkopietz3-byte/trust-core/issues"
+  },
   "type": "module",
-  "sideEffects": false,
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -34,21 +42,33 @@
       "import": "./dist/shared/types.js"
     }
   },
+  "sideEffects": false,
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build",
+    "lint": "eslint . --max-warnings=0",
+    "audit:dependencies": "npm audit --package-lock-only --include=dev --ignore-scripts --audit-level=low",
+    "verify:package": "node scripts/verify-package.mjs",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run verify:package"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.9.1",
+    "globals": "17.12.0",
     "typescript": "^5.9.3",
-    "vitest": "^2.1.9"
+    "typescript-eslint": "8.70.0",
+    "vite": "7.3.6",
+    "vitest": "4.1.11"
   }
 }
