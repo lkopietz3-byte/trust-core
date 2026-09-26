@@ -1,7 +1,7 @@
 {
   "name": "trust-core",
   "version": "0.1.0",
-  "description": "Composable entity-trust scoring: score known contributors, and detect astroturf in anonymous signals. Zero runtime dependencies.",
+  "description": "Deterministic entity-trust scoring: weight known contributors' signals, and gauge how organic anonymous sentiment looks. Zero runtime dependencies.",
   "keywords": [
     "trust",
     "scoring",
