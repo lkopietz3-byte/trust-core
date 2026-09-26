@@ -180,6 +180,43 @@ describe("assessAuthenticity — recency and confidence", () => {
   });
 });
 
+describe("README worked example reproduces exactly", () => {
+  it("matches the exact numbers printed in README.md's anonymous example", () => {
+    // Same config, signals, and options as the README's `anonymous` section.
+    const readmeConfig = resolveAnonymousConfig({
+      sourceWeights: { forum: 0.85, marketplace: 0.5, aggregator: 0.4, blog: 0.6 },
+      weights: { consensus: 0.4, diversity: 0.25, volume: 0.2, recency: 0.15 },
+      astroturfWeight: 0.35,
+      recency: { halfLifeDays: 540, missingDateAgeDays: 540 },
+      volumeSaturation: 12,
+      astroturf: {
+        concentrationSourceCeiling: 1,
+        concentrationPenalty: 0.6,
+        uniformMeanThreshold: 0.85,
+        uniformVarianceThreshold: 0.02,
+        uniformPenalty: 0.4,
+        minSignalsForUniformCheck: 3,
+      },
+      confidence: { high: 6, moderate: 3 },
+    });
+    const readmeSignals: AnonymousSignal[] = [
+      { id: "s1", source: "forum", sentiment: 0.7, confidence: 0.9, publishedAt: "2026-07-01T00:00:00Z" },
+      { id: "s2", source: "marketplace", sentiment: 0.4, confidence: 0.8, publishedAt: "2026-06-15T00:00:00Z" },
+      { id: "s3", source: "blog", sentiment: 0.8, confidence: 0.85, publishedAt: "2026-05-20T00:00:00Z" },
+    ];
+    const verdict = assessAuthenticity(readmeSignals, readmeConfig, { now: "2026-08-01T00:00:00Z" });
+
+    expect(verdict.trustScore).toBe(83);
+    expect(verdict.components.consensus).toBeCloseTo(0.8288923795049216, 9);
+    expect(verdict.components.diversity).toBe(1);
+    expect(verdict.components.volume).toBeCloseTo(0.5404763088546395, 9);
+    expect(verdict.components.recency).toBeCloseTo(0.9380486285411919, 9);
+    expect(verdict.components.astroturfPenalty).toBe(0);
+    expect(verdict.confidence).toEqual({ level: "moderate", effectiveSampleSize: 3 });
+    expect(verdict.explanation).toBe("Trust 83/100 across 3 independent sources. Sentiment is strongly positive.");
+  });
+});
+
 describe("prototype-pollution keys are rejected, not silently miscomputed", () => {
   it("treats a source type named 'constructor' as unweighted (0), instead of NaN-poisoning consensus", () => {
     // Old code read `config.sourceWeights["constructor"]`, which resolved to

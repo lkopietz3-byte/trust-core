@@ -201,6 +201,50 @@ describe("composeDimensions", () => {
   });
 });
 
+describe("README worked example reproduces exactly", () => {
+  it("matches the exact numbers printed in README.md's identified example", () => {
+    // Same config, signals, and options as the README's `identified` section.
+    const readmeConfig = resolveIdentifiedConfig({
+      tierWeights: { new: 0.4, standard: 0.7, verified: 1.0, expert: 1.3 },
+      sourceWeights: { imported: 0.5, direct: 1.0 },
+      proofWeights: { none: 0.5, receipt: 1.15 },
+      reputation: { floor: 0.6, ceil: 1.4, neutral: 1.0 },
+      recency: { halfLifeDays: 365, missingDateAgeDays: 365 },
+      confidence: { high: 8, moderate: 3 },
+    });
+    const readmeSignals: IdentifiedSignal[] = [
+      {
+        id: "r1",
+        tier: "verified",
+        source: "direct",
+        proof: "receipt",
+        reputation: 85,
+        occurredAt: "2026-06-01T00:00:00Z",
+        value: 92,
+      },
+      {
+        id: "r2",
+        tier: "new",
+        source: "imported",
+        proof: "none",
+        reputation: null,
+        occurredAt: "2026-01-01T00:00:00Z",
+        value: 60,
+      },
+    ];
+    const result = scoreEntity(readmeSignals, readmeConfig, {
+      asOf: "2026-08-01T00:00:00Z",
+      prior: 55,
+      dial: "balanced",
+    });
+
+    expect(result.score).toBeCloseTo(64.08185961912646, 9);
+    expect(result.raw).toBeCloseTo(90.44723969764902, 9);
+    expect(result.nEff).toBeCloseTo(1.3778461895225407, 9);
+    expect(result.confidence).toEqual({ level: "thin", effectiveSampleSize: result.nEff });
+  });
+});
+
 describe("prototype-pollution keys are rejected, not silently miscomputed", () => {
   it("throws a clear error for a signal tier named 'constructor', instead of returning NaN", () => {
     const bad = signal({ tier: "constructor" });
