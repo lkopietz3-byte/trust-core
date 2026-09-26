@@ -12,6 +12,8 @@
  * Every function takes whatever "now" it needs as an explicit ISO string.
  */
 
+import { checkNumber, deepFreeze, hasOwn, show } from "./internal.js";
+
 // ---------------------------------------------------------------------------
 // Bounding
 // ---------------------------------------------------------------------------
@@ -97,7 +99,7 @@ export interface TrustDial {
   description: string;
 }
 
-export const TRUST_DIALS: Record<TrustDialPreset, TrustDial> = {
+export const TRUST_DIALS: Record<TrustDialPreset, TrustDial> = deepFreeze({
   as_is: {
     C: 0.5,
     label: "As-is",
@@ -114,11 +116,28 @@ export const TRUST_DIALS: Record<TrustDialPreset, TrustDial> = {
     label: "Strict",
     description: "Demand deep, credible evidence before a score is allowed to stand on its own.",
   },
-} as const;
+});
 
-/** Resolve a dial preset name (or a raw `C` number) to its numeric strength. */
+/**
+ * Resolve a dial preset name (or a raw `C` number) to its numeric strength.
+ *
+ * A numeric `dial` must be a finite number `>= 0` (a negative `C` would pull
+ * the score away from the prior instead of toward it). A string `dial` must
+ * be an own key of {@link TRUST_DIALS} — looked up with `Object.hasOwn` so a
+ * prototype-chain name such as `"constructor"` or `"toString"` is rejected
+ * with a clear error instead of resolving to an inherited, non-numeric `.C`.
+ *
+ * @throws RangeError if `dial` is a negative/non-finite number, or a string
+ *   that is not one of `"as_is" | "balanced" | "strict"`.
+ */
 export function resolveDial(dial: TrustDialPreset | number): number {
-  return typeof dial === "number" ? dial : TRUST_DIALS[dial].C;
+  if (typeof dial === "number") return checkNumber(dial, "dial", { min: 0 });
+  if (!hasOwn(TRUST_DIALS, dial)) {
+    throw new RangeError(
+      `dial must be one of ${Object.keys(TRUST_DIALS).join(", ")}, or a non-negative number (got ${show(dial)})`,
+    );
+  }
+  return TRUST_DIALS[dial].C;
 }
 
 // ---------------------------------------------------------------------------
