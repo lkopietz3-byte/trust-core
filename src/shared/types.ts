@@ -44,7 +44,14 @@ export type Weight = number;
 // Recency decay
 // ---------------------------------------------------------------------------
 
-/** Whole days between two ISO timestamps (`toISO` minus `fromISO`). Can be negative. */
+/**
+ * Days between two ISO timestamps (`toISO` minus `fromISO`), as a real
+ * number — fractional when the timestamps aren't exactly a whole number of
+ * days apart (e.g. 12 hours apart is `0.5`), not rounded or truncated. This
+ * is deliberate: {@link recencyDecay} is a continuous exponential curve, and
+ * rounding here would introduce needless day-sized steps in it. Can be
+ * negative when `toISO` is earlier than `fromISO`.
+ */
 export function daysBetween(fromISO: string, toISO: string): number {
   const MS_PER_DAY = 24 * 60 * 60 * 1000;
   return (Date.parse(toISO) - Date.parse(fromISO)) / MS_PER_DAY;
@@ -73,8 +80,11 @@ export function recencyDecay(ageDays: number, halfLifeDays: number): number {
  *   shrunk = (weightedSum + dial * prior) / (totalWeight + dial)
  *
  * With `totalWeight = 0` this collapses to `prior` exactly (no divide-by-zero,
- * no evidence still yields a defined score). As `totalWeight` grows past
- * `dial`, the result converges on the unshrunk weighted mean.
+ * no evidence still yields a defined score) for any non-negative `dial`,
+ * including `dial = 0` — a caller who explicitly wants zero shrinkage still
+ * gets `prior` back rather than `NaN` from a `0 / 0` when there is also no
+ * evidence. As `totalWeight` grows past `dial`, the result converges on the
+ * unshrunk weighted mean.
  */
 export function shrinkTowardPrior(
   weightedSum: number,
@@ -82,7 +92,8 @@ export function shrinkTowardPrior(
   prior: number,
   dial: number,
 ): number {
-  return (weightedSum + dial * prior) / (totalWeight + dial);
+  const denominator = totalWeight + dial;
+  return denominator > 0 ? (weightedSum + dial * prior) / denominator : prior;
 }
 
 /**
