@@ -22,6 +22,7 @@
  */
 
 import {
+  clamp,
   clamp01,
   confidenceFromSampleSize,
   daysBetween,
@@ -33,6 +34,20 @@ import {
   type TrustDialPreset,
   type Weight,
 } from "../shared/types.js";
+import {
+  checkArray,
+  checkNumber,
+  checkRecencyCurve,
+  checkRecord,
+  checkString,
+  checkThresholds,
+  checkTimestamp,
+  checkWeightMap,
+  deepFreeze,
+  exactSum,
+  hasOwn,
+  rejectUnknownKeys,
+} from "../shared/internal.js";
 
 export { TRUST_DIALS, type TrustDial, type TrustDialPreset } from "../shared/types.js";
 
@@ -93,34 +108,81 @@ export interface IdentifiedConfig {
  * expert), not a domain default. Real callers should supply their own tier,
  * source, and proof vocabularies via {@link resolveIdentifiedConfig}.
  */
-export const EXAMPLE_IDENTIFIED_CONFIG: IdentifiedConfig = {
+export const EXAMPLE_IDENTIFIED_CONFIG: IdentifiedConfig = deepFreeze({
   tierWeights: { new: 0.4, standard: 0.7, verified: 1.0, expert: 1.3 },
   sourceWeights: { imported: 0.5, referred: 0.8, direct: 1.0 },
   proofWeights: { none: 0.5, self_attested: 0.75, verified: 1.0, documented: 1.2 },
   reputation: { floor: 0.6, ceil: 1.4, neutral: 1.0 },
   recency: { halfLifeDays: 540, missingDateAgeDays: 720 },
   confidence: { high: 8, moderate: 3 },
-};
+});
 
-/** Shallow-merge a partial override over {@link EXAMPLE_IDENTIFIED_CONFIG}. */
-export function resolveIdentifiedConfig(overrides?: Partial<IdentifiedConfig>): IdentifiedConfig {
-  if (!overrides) return EXAMPLE_IDENTIFIED_CONFIG;
+const IDENTIFIED_CONFIG_KEYS = [
+  "tierWeights",
+  "sourceWeights",
+  "proofWeights",
+  "reputation",
+  "recency",
+  "confidence",
+] as const;
+const REPUTATION_CURVE_KEYS = ["floor", "ceil", "neutral"] as const;
+
+function checkReputationCurve(curve: ReputationCurve): ReputationCurve {
+  rejectUnknownKeys(curve, REPUTATION_CURVE_KEYS, "reputation");
   return {
-    tierWeights: { ...EXAMPLE_IDENTIFIED_CONFIG.tierWeights, ...overrides.tierWeights },
-    sourceWeights: { ...EXAMPLE_IDENTIFIED_CONFIG.sourceWeights, ...overrides.sourceWeights },
-    proofWeights: { ...EXAMPLE_IDENTIFIED_CONFIG.proofWeights, ...overrides.proofWeights },
-    reputation: { ...EXAMPLE_IDENTIFIED_CONFIG.reputation, ...overrides.reputation },
-    recency: { ...EXAMPLE_IDENTIFIED_CONFIG.recency, ...overrides.recency },
-    confidence: { ...EXAMPLE_IDENTIFIED_CONFIG.confidence, ...overrides.confidence },
+    floor: checkNumber(curve.floor, "reputation.floor", { min: 0 }),
+    ceil: checkNumber(curve.ceil, "reputation.ceil", { min: 0 }),
+    neutral: checkNumber(curve.neutral, "reputation.neutral", { min: 0 }),
   };
 }
 
+/**
+ * Shallow-merge a partial override over {@link EXAMPLE_IDENTIFIED_CONFIG} and
+ * validate the result: every weight map value is a finite number `>= 0`, the
+ * recency and confidence sub-objects have no unknown keys and satisfy their
+ * own numeric bounds (`moderate <= high`), and the reputation curve's
+ * multipliers are finite and non-negative. The returned config is deep-frozen
+ * so it cannot be mutated after the fact.
+ *
+ * @throws TypeError if `overrides` (or a sub-object of it) is not a plain
+ *   object, or has a key outside the known shape.
+ * @throws RangeError if a weight, curve, or threshold value is missing,
+ *   `NaN`, infinite (where not allowed), negative, or otherwise out of range.
+ */
+export function resolveIdentifiedConfig(overrides?: Partial<IdentifiedConfig>): IdentifiedConfig {
+  if (!overrides) return EXAMPLE_IDENTIFIED_CONFIG;
+  checkRecord(overrides, "overrides");
+  rejectUnknownKeys(overrides, IDENTIFIED_CONFIG_KEYS, "overrides");
+
+  const tierWeights = { ...EXAMPLE_IDENTIFIED_CONFIG.tierWeights, ...overrides.tierWeights };
+  const sourceWeights = { ...EXAMPLE_IDENTIFIED_CONFIG.sourceWeights, ...overrides.sourceWeights };
+  const proofWeights = { ...EXAMPLE_IDENTIFIED_CONFIG.proofWeights, ...overrides.proofWeights };
+  checkWeightMap(tierWeights, "tierWeights");
+  checkWeightMap(sourceWeights, "sourceWeights");
+  checkWeightMap(proofWeights, "proofWeights");
+
+  const reputation = checkReputationCurve({ ...EXAMPLE_IDENTIFIED_CONFIG.reputation, ...overrides.reputation });
+  const recency = { ...EXAMPLE_IDENTIFIED_CONFIG.recency, ...overrides.recency };
+  checkRecencyCurve(recency, "recency");
+  const confidence = checkThresholds(
+    { ...EXAMPLE_IDENTIFIED_CONFIG.confidence, ...overrides.confidence },
+    "confidence",
+  );
+
+  return deepFreeze({ tierWeights, sourceWeights, proofWeights, reputation, recency, confidence });
+}
+
+/**
+ * Look up `key` in a weight map, checked with `Object.hasOwn` so a
+ * prototype-chain name (`"constructor"`, `"toString"`, `"__proto__"`, ...)
+ * is treated as absent rather than silently resolving to an inherited,
+ * non-numeric value that would turn the whole signal weight into `NaN`.
+ */
 function lookupWeight(map: Record<string, number>, key: string, kind: string): number {
-  const w = map[key];
-  if (w === undefined) {
+  if (!hasOwn(map, key)) {
     throw new Error(`trust-core/identified: no weight configured for ${kind} "${key}"`);
   }
-  return w;
+  return map[key]!;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,11 +201,31 @@ export function signalAgeDays(occurredAt: string | null, asOf: string, recency: 
   return Math.max(0, daysBetween(occurredAt, asOf));
 }
 
-/** The intrinsic weight of one signal: tier x source x proof x reputation x recency. */
+/**
+ * The intrinsic weight of one signal: tier x source x proof x reputation x
+ * recency. Validates the signal's fields first, so a malformed signal (an
+ * out-of-range `value`/`reputation`, a non-ISO `occurredAt`, a non-string
+ * tier/source/proof) throws a clear `TypeError`/`RangeError` here instead of
+ * silently producing a `NaN` weight several calls later.
+ *
+ * @throws TypeError if `asOf`/`occurredAt` is not a valid ISO 8601 timestamp,
+ *   or `tier`/`source`/`proof`/`id` is not a string.
+ * @throws RangeError if `value` or `reputation` is outside `[0, 100]`, or if
+ *   `tier`/`source`/`proof` has no configured weight.
+ */
 export function signalWeight(signal: IdentifiedSignal, config: IdentifiedConfig, asOf: string): Weight {
-  const tier = lookupWeight(config.tierWeights, signal.tier, "tier");
-  const source = lookupWeight(config.sourceWeights, signal.source, "source");
-  const proof = lookupWeight(config.proofWeights, signal.proof, "proof");
+  checkTimestamp(asOf, "asOf");
+  checkString(signal.id, "signal.id");
+  const tierKey = checkString(signal.tier, "signal.tier");
+  const sourceKey = checkString(signal.source, "signal.source");
+  const proofKey = checkString(signal.proof, "signal.proof");
+  if (signal.reputation !== null) checkNumber(signal.reputation, "signal.reputation", { min: 0, max: 100 });
+  if (signal.occurredAt !== null) checkTimestamp(signal.occurredAt, "signal.occurredAt");
+  checkNumber(signal.value, "signal.value", { min: 0, max: 100 });
+
+  const tier = lookupWeight(config.tierWeights, tierKey, "tier");
+  const source = lookupWeight(config.sourceWeights, sourceKey, "source");
+  const proof = lookupWeight(config.proofWeights, proofKey, "proof");
   const reputation = reputationFactor(signal.reputation, config.reputation);
   const age = signalAgeDays(signal.occurredAt, asOf, config.recency);
   const recency = recencyDecay(age, config.recency.halfLifeDays);
@@ -191,23 +273,38 @@ export interface ScoreEntityOptions {
  * signals. Call it once per dimension (quality, reliability, communication,
  * ...) and combine the results with {@link composeDimensions} if a domain
  * needs more than one axis.
+ *
+ * Signal weights and weighted values are summed with an order-independent,
+ * correctly-rounded algorithm (`exactSum`), so `score`/`raw`/`nEff` do not
+ * depend on the order `signals` is given in and do not drift as the count
+ * grows. `score` and `raw` are clamped to `[0, 100]` as a final safety net
+ * against floating-point overshoot at the boundary.
+ *
+ * @throws TypeError if `asOf` is not a valid ISO 8601 timestamp, or `signals`
+ *   is not an array.
+ * @throws RangeError if `prior` is outside `[0, 100]`, `dial` is a negative
+ *   number or an unrecognized preset name, or any signal fails validation
+ *   (see {@link signalWeight}).
  */
 export function scoreEntity(
   signals: readonly IdentifiedSignal[],
   config: IdentifiedConfig,
   options: ScoreEntityOptions,
 ): EntityScore {
+  checkArray(signals, "signals");
   const { asOf, prior } = options;
+  checkTimestamp(asOf, "asOf");
+  checkNumber(prior, "prior", { min: 0, max: 100 });
   const C = resolveDial(options.dial ?? "balanced");
 
-  let weightedSum = 0;
-  let nEff = 0;
+  const weights: number[] = [];
+  const weightedValues: number[] = [];
   const contributions: SignalContribution[] = [];
 
   for (const signal of signals) {
     const weight = signalWeight(signal, config, asOf);
-    weightedSum += weight * signal.value;
-    nEff += weight;
+    weights.push(weight);
+    weightedValues.push(weight * signal.value);
     contributions.push({
       id: signal.id,
       tier: signal.tier,
@@ -220,8 +317,10 @@ export function scoreEntity(
 
   contributions.sort((a, b) => b.weight - a.weight);
 
-  const raw = nEff > 0 ? weightedSum / nEff : null;
-  const score = shrinkTowardPrior(weightedSum, nEff, prior, C);
+  const nEff = exactSum(weights);
+  const weightedSum = exactSum(weightedValues);
+  const raw = nEff > 0 ? clamp(weightedSum / nEff, 0, 100) : null;
+  const score = clamp(shrinkTowardPrior(weightedSum, nEff, prior, C), 0, 100);
 
   return {
     score,
@@ -238,19 +337,28 @@ export function scoreEntity(
  * Combine several already-scored dimensions (e.g. quality, reliability,
  * communication) into one composite using caller-supplied weights.
  * Dimensions with a missing or non-positive weight are excluded. Returns 0
- * if no dimension has a positive weight.
+ * if no dimension has a positive weight. `weights` is looked up with
+ * `Object.hasOwn` so a prototype-chain dimension name is treated as missing
+ * (weight 0) rather than resolving to an inherited, non-numeric value.
+ *
+ * @throws TypeError if `scores` or `weights` is not a plain object.
+ * @throws RangeError if a weight present in `weights` is `NaN` or infinite.
  */
 export function composeDimensions(
   scores: Record<string, EntityScore>,
   weights: Record<string, number>,
 ): number {
-  let num = 0;
-  let den = 0;
+  checkRecord(scores, "scores");
+  checkRecord(weights, "weights");
+  const numerators: number[] = [];
+  const denominators: number[] = [];
   for (const [key, score] of Object.entries(scores)) {
-    const w = weights[key] ?? 0;
+    const w = hasOwn(weights, key) ? weights[key]! : 0;
+    checkNumber(w, `weights[${JSON.stringify(key)}]`, {});
     if (w <= 0) continue;
-    num += w * score.score;
-    den += w;
+    numerators.push(w * score.score);
+    denominators.push(w);
   }
-  return den > 0 ? num / den : 0;
+  const den = exactSum(denominators);
+  return den > 0 ? clamp(exactSum(numerators) / den, 0, 100) : 0;
 }
