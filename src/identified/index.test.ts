@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   composeDimensions,
   EXAMPLE_IDENTIFIED_CONFIG,
+  reputationFactor,
   resolveIdentifiedConfig,
   scoreEntity,
+  signalAgeDays,
   signalWeight,
   TRUST_DIALS,
   type IdentifiedConfig,
@@ -257,6 +259,40 @@ describe("input validation at the scoring boundary", () => {
   it("rejects a prior outside [0, 100] — an out-of-range prior would otherwise let the score escape the documented range", () => {
     expect(() => scoreEntity([signal()], config, { asOf: NOW, prior: 150 })).toThrow(RangeError);
     expect(() => scoreEntity([signal()], config, { asOf: NOW, prior: -1 })).toThrow(RangeError);
+  });
+});
+
+describe("reputationFactor and signalAgeDays validate their own inputs directly", () => {
+  // Both are exported public API (see api-surface.json), independently
+  // callable without going through signalWeight's validation — so each must
+  // guard against bad input on its own instead of relying on a caller that
+  // happens to validate first.
+  const curve = { floor: 0.6, ceil: 1.4, neutral: 1.0 };
+  const recency = { halfLifeDays: 365, missingDateAgeDays: 365 };
+
+  it("reputationFactor rejects NaN instead of silently returning a NaN factor", () => {
+    expect(() => reputationFactor(Number.NaN, curve)).toThrow(RangeError);
+  });
+
+  it("reputationFactor rejects out-of-range reputation", () => {
+    expect(() => reputationFactor(150, curve)).toThrow(RangeError);
+    expect(() => reputationFactor(-1, curve)).toThrow(RangeError);
+  });
+
+  it("reputationFactor still treats null as neutral", () => {
+    expect(reputationFactor(null, curve)).toBe(curve.neutral);
+  });
+
+  it("signalAgeDays rejects a non-ISO occurredAt instead of silently returning a NaN age", () => {
+    expect(() => signalAgeDays("not-a-date", NOW, recency)).toThrow();
+  });
+
+  it("signalAgeDays rejects a non-ISO asOf", () => {
+    expect(() => signalAgeDays("2026-01-01T00:00:00Z", "not-a-date", recency)).toThrow();
+  });
+
+  it("signalAgeDays still falls back to missingDateAgeDays for null", () => {
+    expect(signalAgeDays(null, NOW, recency)).toBe(recency.missingDateAgeDays);
   });
 });
 

@@ -189,15 +189,31 @@ function lookupWeight(map: Record<string, number>, key: string, kind: string): n
 // Per-signal weight components
 // ---------------------------------------------------------------------------
 
-/** Map reputation 0-100 onto a bounded multiplier; unknown reputation is neutral. */
+/**
+ * Map reputation 0-100 onto a bounded multiplier; unknown reputation is
+ * neutral.
+ *
+ * @throws RangeError if `reputation` is not `null` and outside `[0, 100]`
+ *   (including `NaN`, which would otherwise silently produce a `NaN` factor).
+ */
 export function reputationFactor(reputation: number | null, curve: ReputationCurve): number {
-  if (reputation == null) return curve.neutral;
+  if (reputation === null) return curve.neutral;
+  checkNumber(reputation, "reputation", { min: 0, max: 100 });
   return curve.floor + (curve.ceil - curve.floor) * clamp01(reputation / 100);
 }
 
-/** Age in days of a signal's `occurredAt`, falling back to a configured age when unknown. */
+/**
+ * Age in days of a signal's `occurredAt`, falling back to a configured age
+ * when unknown.
+ *
+ * @throws TypeError if `occurredAt` (when not `null`) or `asOf` is not a
+ *   valid ISO 8601 timestamp (an invalid one would otherwise silently
+ *   produce a `NaN` age via `Date.parse`).
+ */
 export function signalAgeDays(occurredAt: string | null, asOf: string, recency: RecencyCurve): number {
-  if (!occurredAt) return recency.missingDateAgeDays;
+  checkTimestamp(asOf, "asOf");
+  if (occurredAt === null) return recency.missingDateAgeDays;
+  checkTimestamp(occurredAt, "occurredAt");
   return Math.max(0, daysBetween(occurredAt, asOf));
 }
 
