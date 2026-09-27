@@ -12,11 +12,11 @@ A real product may need both halves at once. It can weight signals from known re
 
 ## Install
 
-Not yet published to npm. Install from GitHub until it is:
-
 ```bash
-npm install github:lkopietz3-byte/trust-core
+npm install trust-core
 ```
+
+Or build from source: clone the repository and run `npm install && npm run build`.
 
 ## `identified` — score known contributors
 

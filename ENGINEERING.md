@@ -52,9 +52,10 @@ something." Regenerate `api-surface.json` with
 
 ## Release and rollback
 
-Not yet published to npm; install from GitHub (see README). When it is
-published: this is a pure-function library with no persisted state and no
-migrations, so a bad release is rolled back by publishing the previous
-version's tag — there is nothing to undo beyond the package version itself.
+`npm run verify` (lint, typecheck, test, build, verify:package) runs
+automatically before publish via the `prepublishOnly` script. This is a
+pure-function library with no persisted state and no migrations, so npm
+allows `npm unpublish` only within 72 hours of publishing; after that,
+publish a fixed patch version instead of trying to unpublish a bad release.
 Breaking API changes require a major version bump and a CHANGELOG entry
 explaining what changed and why.
