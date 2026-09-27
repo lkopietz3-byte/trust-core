@@ -159,6 +159,35 @@ export function deepFreeze<T>(value: T): T {
 }
 
 // ---------------------------------------------------------------------------
+// Clock readings: a strict ISO 8601 string, or a `Date`
+// ---------------------------------------------------------------------------
+
+/**
+ * Accept a "now"/"as of" clock reading as either a strict ISO 8601 string
+ * ({@link checkTimestamp}) or a `Date`, and return the ISO string form used
+ * internally. A `Date` is accepted here — like claims-registry-kit and
+ * freshness-kit's `now: Date` — so a caller who already has one (`new
+ * Date()`) doesn't have to stringify it themselves; per-signal timestamps
+ * (`occurredAt`, `publishedAt`) stay string-only, since those are typically
+ * read from storage already serialized. Throws `TypeError` if `value` is
+ * neither a `Date` nor a string, `RangeError` for an invalid `Date` (`new
+ * Date("nonsense")`) or a malformed string (see {@link checkTimestamp}).
+ */
+export function checkClock(value: unknown, label: string): string {
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) {
+      throw new RangeError(`${label} must be a valid Date (got an Invalid Date)`);
+    }
+    return value.toISOString();
+  }
+  // checkTimestamp returns parsed epoch milliseconds, not the string itself;
+  // it throws on anything that isn't a valid ISO 8601 string, so once it
+  // returns without throwing, `value` is known to be that valid string.
+  checkTimestamp(value, label);
+  return value as string;
+}
+
+// ---------------------------------------------------------------------------
 // Strict ISO 8601 timestamps
 // ---------------------------------------------------------------------------
 

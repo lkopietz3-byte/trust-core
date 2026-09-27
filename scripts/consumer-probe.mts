@@ -43,7 +43,7 @@ const idSignal: IdentifiedSignal = {
   value: 90,
 };
 const idResult: EntityScore = scoreEntity([idSignal], idConfig, {
-  asOf: "2026-08-01T00:00:00Z",
+  now: "2026-08-01T00:00:00Z",
   prior: 50,
   dial: dialPreset,
 });
@@ -68,7 +68,7 @@ if (anonResult.flags.uniformSentiment !== false) throw new Error("expected a sin
 // Namespace re-exports from the root entry point line up with the direct
 // subpath exports, at the type level.
 const viaNamespace: EntityScore = identified.scoreEntity([idSignal], idConfig, {
-  asOf: "2026-08-01T00:00:00Z",
+  now: "2026-08-01T00:00:00Z",
   prior: 50,
 });
 const viaNamespaceAnon: AuthenticityAssessment = anonymous.assessAuthenticity([anonSignal], anonConfig, {

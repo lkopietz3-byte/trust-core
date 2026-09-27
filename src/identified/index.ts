@@ -36,6 +36,7 @@ import {
 } from "../shared/types.js";
 import {
   checkArray,
+  checkClock,
   checkNumber,
   checkRecencyCurve,
   checkRecord,
@@ -276,8 +277,13 @@ export interface EntityScore {
 }
 
 export interface ScoreEntityOptions {
-  /** ISO "now" recency decay is computed against. Pass a fixed value for determinism. */
-  asOf: string;
+  /**
+   * "Now" recency decay is computed against: a strict ISO 8601 string, or a
+   * `Date`. Pass a fixed value for determinism. Named `now` (not `asOf`) to
+   * match `anonymous.assessAuthenticity` and sibling kits
+   * (claims-registry-kit, freshness-kit).
+   */
+  now: string | Date;
   /** The domain/category baseline the score shrinks toward when evidence is thin. */
   prior: number;
   /** Shrinkage strength: a named dial preset, or a custom `C`. Defaults to "balanced". */
@@ -296,11 +302,11 @@ export interface ScoreEntityOptions {
  * grows. `score` and `raw` are clamped to `[0, 100]` as a final safety net
  * against floating-point overshoot at the boundary.
  *
- * @throws TypeError if `asOf` is not a valid ISO 8601 timestamp, or `signals`
- *   is not an array.
- * @throws RangeError if `prior` is outside `[0, 100]`, `dial` is a negative
- *   number or an unrecognized preset name, or any signal fails validation
- *   (see {@link signalWeight}).
+ * @throws TypeError if `options` is missing/not an object, `now` is neither
+ *   a valid ISO 8601 timestamp nor a `Date`, or `signals` is not an array.
+ * @throws RangeError if `now` is an Invalid `Date`, `prior` is outside
+ *   `[0, 100]`, `dial` is a negative number or an unrecognized preset name,
+ *   or any signal fails validation (see {@link signalWeight}).
  */
 export function scoreEntity(
   signals: readonly IdentifiedSignal[],
@@ -308,8 +314,9 @@ export function scoreEntity(
   options: ScoreEntityOptions,
 ): EntityScore {
   checkArray(signals, "signals");
-  const { asOf, prior } = options;
-  checkTimestamp(asOf, "asOf");
+  checkRecord(options, "options");
+  const { prior } = options;
+  const now = checkClock(options.now, "now");
   checkNumber(prior, "prior", { min: 0, max: 100 });
   const C = resolveDial(options.dial ?? "balanced");
 
@@ -318,7 +325,7 @@ export function scoreEntity(
   const contributions: SignalContribution[] = [];
 
   for (const signal of signals) {
-    const weight = signalWeight(signal, config, asOf);
+    const weight = signalWeight(signal, config, now);
     weights.push(weight);
     weightedValues.push(weight * signal.value);
     contributions.push({
@@ -327,7 +334,7 @@ export function scoreEntity(
       source: signal.source,
       proof: signal.proof,
       weight,
-      ageDays: signal.occurredAt ? Math.max(0, daysBetween(signal.occurredAt, asOf)) : null,
+      ageDays: signal.occurredAt ? Math.max(0, daysBetween(signal.occurredAt, now)) : null,
     });
   }
 

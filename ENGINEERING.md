@@ -31,10 +31,19 @@ npm audit --include=dev
 `npm run verify:package` packs the built tarball, installs it into a clean
 temp project, imports every `exports` entry by its public specifier, checks
 the result against `api-surface.json` (a deliberate diff on any public API
-change), and runs `scripts/consumer-probe.mjs`/`.mts` — a probe that imports
-the package by name and asserts real outputs, not just "it exports
-something." Regenerate `api-surface.json` with
+change), and runs `scripts/consumer-probe.mjs`/`.cjs`/`.mts` — probes that
+import (or `require()`) the package by name and assert real outputs, not
+just "it exports something." Regenerate `api-surface.json` with
 `node scripts/verify-package.mjs --update-api` and review the diff.
+
+## Packaging
+
+This is an ESM package; `exports`' `default` condition also lets plain
+CommonJS `require("trust-core")` work, on Node 20.19+/22.12+ (`require(esm)`
+support — see README). `.js.map` files ship with `inlineSources` so
+go-to-definition resolves without `src/` in the tarball; `.d.ts.map` is
+turned off (`declarationMap: false`) for the same reason, rather than shipping
+`src/` just to back it.
 
 ## What is NOT certified
 

@@ -44,7 +44,7 @@ const idSignals = [
   },
 ];
 const idResult = identified.scoreEntity(idSignals, idConfig, {
-  asOf: "2026-08-01T00:00:00Z",
+  now: "2026-08-01T00:00:00Z",
   prior: 50,
   dial: "balanced",
 });
@@ -55,7 +55,7 @@ assert.equal(idResult.signalCount, 1);
 
 // Validation: a malformed signal must throw, not silently degrade.
 assert.throws(
-  () => identified.scoreEntity([{ ...idSignals[0], value: 500 }], idConfig, { asOf: "2026-08-01T00:00:00Z", prior: 50 }),
+  () => identified.scoreEntity([{ ...idSignals[0], value: 500 }], idConfig, { now: "2026-08-01T00:00:00Z", prior: 50 }),
   RangeError,
   "an out-of-range signal value should throw, not silently produce an out-of-range score",
 );

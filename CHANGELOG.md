@@ -31,3 +31,14 @@ primitives for entity trust:
 - `EXAMPLE_IDENTIFIED_CONFIG`, `EXAMPLE_ANONYMOUS_CONFIG`, and `TRUST_DIALS`
   are deep-frozen, and every config `resolveIdentifiedConfig`/
   `resolveAnonymousConfig` returns is frozen too.
+- CommonJS `require("trust-core")` works alongside `import`, on Node
+  20.19+/22.12+ (`require(esm)` support) — `exports` adds a `default`
+  condition next to `import` for every entry point.
+- `identified.scoreEntity`'s and `anonymous.assessAuthenticity`'s clock
+  option is named `now` on both (previously `asOf` on `identified`), and
+  accepts a `Date` as well as a strict ISO 8601 string. Calling either
+  function without its required options argument now throws the kit's own
+  `TypeError` instead of a raw native one.
+- Shipped `.js.map` files inline their source content (`inlineSources`) so
+  go-to-definition resolves without `src/` in the tarball; `.d.ts.map` is not
+  emitted (`declarationMap: false`), since `src/` itself isn't shipped.
