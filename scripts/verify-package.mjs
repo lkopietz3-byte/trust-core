@@ -75,6 +75,35 @@ for (const required of ['package.json', 'README.md', 'LICENSE']) {
 }
 assert.ok(packed.some((p) => p.startsWith('dist/')), 'Tarball has no dist/ output; run npm run build first');
 
+// 2b. Every source map's `sources` entry must resolve for a consumer: either
+// that source file is itself shipped in the tarball, or the map embeds its
+// text via a non-empty `sourcesContent` entry. `tsc` does not delete outputs
+// it stopped emitting (e.g. a stale .d.ts.map from before declarationMap was
+// turned off), so this also catches dist/ not being rebuilt from clean.
+const packedSet = new Set(packed);
+for (const mapPath of packed.filter((p) => p.endsWith('.map'))) {
+  const map = JSON.parse(readFileSync(join(root, mapPath), 'utf8'));
+  const sources = Array.isArray(map.sources) ? map.sources : [];
+  const sourcesContent = Array.isArray(map.sourcesContent) ? map.sourcesContent : [];
+  const mapDir = mapPath.split('/').slice(0, -1);
+  sources.forEach((src, i) => {
+    const parts = [...mapDir, ...String(src).split('/')];
+    const resolved = [];
+    for (const part of parts) {
+      if (part === '.' || part === '') continue;
+      if (part === '..') resolved.pop();
+      else resolved.push(part);
+    }
+    const shipped = packedSet.has(resolved.join('/'));
+    const embedded = typeof sourcesContent[i] === 'string' && sourcesContent[i].length > 0;
+    assert.ok(
+      shipped || embedded,
+      `${mapPath}: source "${src}" is neither shipped in the tarball nor embedded via sourcesContent ` +
+        `(stale dist/? rebuild from clean, or check inlineSources)`,
+    );
+  });
+}
+
 // 3. Install into a clean consumer --------------------------------------------
 run('npm', [
   'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund',
