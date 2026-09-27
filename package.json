@@ -27,19 +27,23 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./identified": {
       "types": "./dist/identified/index.d.ts",
-      "import": "./dist/identified/index.js"
+      "import": "./dist/identified/index.js",
+      "default": "./dist/identified/index.js"
     },
     "./anonymous": {
       "types": "./dist/anonymous/index.d.ts",
-      "import": "./dist/anonymous/index.js"
+      "import": "./dist/anonymous/index.js",
+      "default": "./dist/anonymous/index.js"
     },
     "./shared": {
       "types": "./dist/shared/types.d.ts",
-      "import": "./dist/shared/types.js"
+      "import": "./dist/shared/types.js",
+      "default": "./dist/shared/types.js"
     }
   },
   "sideEffects": false,
