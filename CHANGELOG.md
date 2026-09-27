@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project has not been published to npm yet, so the version stays `0.1.0`
 until the first real release.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-09-27
 
 First release. Deterministic, zero-runtime-dependency TypeScript scoring
 primitives for entity trust:
