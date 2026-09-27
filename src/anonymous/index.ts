@@ -35,6 +35,7 @@ import {
 } from "../shared/types.js";
 import {
   checkArray,
+  checkClock,
   checkNumber,
   checkRecencyCurve,
   checkRecord,
@@ -269,8 +270,11 @@ export interface AuthenticityAssessment {
 }
 
 export interface AssessAuthenticityOptions {
-  /** ISO "now" recency decay is computed against. Pass a fixed value for determinism. */
-  now: string;
+  /**
+   * "Now" recency decay is computed against: a strict ISO 8601 string, or a
+   * `Date`. Pass a fixed value for determinism.
+   */
+  now: string | Date;
 }
 
 /**
@@ -282,10 +286,11 @@ export interface AssessAuthenticityOptions {
  * summed with an order-independent, correctly-rounded algorithm (`exactSum`),
  * so the result does not depend on the order `signals` is given in.
  *
- * @throws TypeError if `signals` is not an array, or `now`/a signal's
- *   `publishedAt` is not a valid ISO 8601 timestamp.
- * @throws RangeError if a signal's `sentiment` is outside `[-1, 1]` or
- *   `confidence` is outside `[0, 1]`.
+ * @throws TypeError if `options` is missing/not an object, `signals` is not
+ *   an array, or `now`/a signal's `publishedAt` is neither a valid ISO 8601
+ *   timestamp nor a `Date` (`now` only).
+ * @throws RangeError if `now` is an Invalid `Date`, a signal's `sentiment` is
+ *   outside `[-1, 1]`, or `confidence` is outside `[0, 1]`.
  */
 export function assessAuthenticity(
   signals: readonly AnonymousSignal[],
@@ -293,8 +298,8 @@ export function assessAuthenticity(
   options: AssessAuthenticityOptions,
 ): AuthenticityAssessment {
   checkArray(signals, "signals");
-  const { now } = options;
-  checkTimestamp(now, "now");
+  checkRecord(options, "options");
+  const now = checkClock(options.now, "now");
   for (const s of signals) {
     checkString(s.source, "signal.source");
     checkNumber(s.sentiment, "signal.sentiment", { min: -1, max: 1 });

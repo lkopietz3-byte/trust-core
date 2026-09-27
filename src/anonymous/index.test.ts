@@ -258,6 +258,28 @@ describe("input validation at the assessment boundary", () => {
     expect(() => assessAuthenticity("nope" as never, config, { now: NOW })).toThrow(TypeError);
   });
 
+  it("throws the kit's own TypeError when called without the required options argument, not a raw native error", () => {
+    expect(() => (assessAuthenticity as (s: unknown, c: unknown) => unknown)([], config)).toThrow(TypeError);
+    expect(() => (assessAuthenticity as (s: unknown, c: unknown) => unknown)([], config)).toThrow(/options must be an object/);
+  });
+
+  it("rejects a null options argument the same way", () => {
+    expect(() => assessAuthenticity([], config, null as never)).toThrow(TypeError);
+  });
+
+  it("accepts a Date for `now`, matching the ISO-string result exactly", () => {
+    const signals = [sig("forum", 0.6)];
+    const asIso = assessAuthenticity(signals, config, { now: NOW });
+    const asDate = assessAuthenticity(signals, config, { now: new Date(NOW) });
+    expect(asDate).toEqual(asIso);
+  });
+
+  it("rejects an Invalid Date for `now`", () => {
+    expect(() => assessAuthenticity([sig("forum", 0.6)], config, { now: new Date("not-a-date") })).toThrow(
+      RangeError,
+    );
+  });
+
   it("accepts boundary sentiment values -1 and 1 without throwing", () => {
     expect(() => assessAuthenticity([sig("forum", 1), sig("marketplace", -1)], config, { now: NOW })).not.toThrow();
   });

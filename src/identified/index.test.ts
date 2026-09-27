@@ -55,7 +55,7 @@ describe("scoreEntity — shrinkage toward the prior", () => {
   it("pulls a thin single-signal score close to the prior", () => {
     const thin = [signal({ tier: "new", source: "imported", proof: "none", value: 90 })];
 
-    const result = scoreEntity(thin, config, { asOf: NOW, prior: 50, dial: "balanced" });
+    const result = scoreEntity(thin, config, { now: NOW, prior: 50, dial: "balanced" });
 
     // One low-weight signal has almost no leverage against C=4 phantom prior
     // signals: the shrunk score should land much closer to the 50-point
@@ -72,7 +72,7 @@ describe("scoreEntity — shrinkage toward the prior", () => {
       signal({ tier: "verified", source: "direct", proof: "receipt", reputation: 90, value: 90 }),
     );
 
-    const result = scoreEntity(deep, config, { asOf: NOW, prior: 50, dial: "balanced" });
+    const result = scoreEntity(deep, config, { now: NOW, prior: 50, dial: "balanced" });
 
     expect(result.raw).toBeCloseTo(90, 5);
     // With many credible, fresh signals nEff should dwarf the C=4 dial, so
@@ -86,9 +86,9 @@ describe("scoreEntity — shrinkage toward the prior", () => {
     const five = Array.from({ length: 5 }, () => signal({ tier: "standard", value: 90 }));
     const twenty = Array.from({ length: 20 }, () => signal({ tier: "standard", value: 90 }));
 
-    const scoreOne = scoreEntity(one, config, { asOf: NOW, prior: 50, dial: "balanced" }).score;
-    const scoreFive = scoreEntity(five, config, { asOf: NOW, prior: 50, dial: "balanced" }).score;
-    const scoreTwenty = scoreEntity(twenty, config, { asOf: NOW, prior: 50, dial: "balanced" }).score;
+    const scoreOne = scoreEntity(one, config, { now: NOW, prior: 50, dial: "balanced" }).score;
+    const scoreFive = scoreEntity(five, config, { now: NOW, prior: 50, dial: "balanced" }).score;
+    const scoreTwenty = scoreEntity(twenty, config, { now: NOW, prior: 50, dial: "balanced" }).score;
 
     expect(scoreOne).toBeLessThan(scoreFive);
     expect(scoreFive).toBeLessThan(scoreTwenty);
@@ -103,9 +103,9 @@ describe("scoreEntity — the trust dial", () => {
 
   it("strict pulls harder toward the prior than as_is, for identical evidence", () => {
     const prior = 50;
-    const asIs = scoreEntity(evidence, config, { asOf: NOW, prior, dial: "as_is" });
-    const balanced = scoreEntity(evidence, config, { asOf: NOW, prior, dial: "balanced" });
-    const strict = scoreEntity(evidence, config, { asOf: NOW, prior, dial: "strict" });
+    const asIs = scoreEntity(evidence, config, { now: NOW, prior, dial: "as_is" });
+    const balanced = scoreEntity(evidence, config, { now: NOW, prior, dial: "balanced" });
+    const strict = scoreEntity(evidence, config, { now: NOW, prior, dial: "strict" });
 
     // Same signals -> same raw mean and nEff; only the dial differs.
     expect(asIs.raw).toBeCloseTo(balanced.raw!, 6);
@@ -120,8 +120,8 @@ describe("scoreEntity — the trust dial", () => {
   });
 
   it("accepts a caller-defined numeric C in place of a named preset", () => {
-    const named = scoreEntity(evidence, config, { asOf: NOW, prior: 50, dial: "strict" });
-    const custom = scoreEntity(evidence, config, { asOf: NOW, prior: 50, dial: 12 });
+    const named = scoreEntity(evidence, config, { now: NOW, prior: 50, dial: "strict" });
+    const custom = scoreEntity(evidence, config, { now: NOW, prior: 50, dial: 12 });
 
     expect(custom.score).toBeCloseTo(named.score, 10);
   });
@@ -162,12 +162,12 @@ describe("composeDimensions", () => {
     const quality = scoreEntity(
       Array.from({ length: 5 }, () => signal({ tier: "verified", value: 90 })),
       config,
-      { asOf: NOW, prior: 50 },
+      { now: NOW, prior: 50 },
     );
     const reliability = scoreEntity(
       Array.from({ length: 5 }, () => signal({ tier: "verified", value: 60 })),
       config,
-      { asOf: NOW, prior: 50 },
+      { now: NOW, prior: 50 },
     );
 
     const composite = composeDimensions(
@@ -180,12 +180,12 @@ describe("composeDimensions", () => {
   });
 
   it("returns 0 when no dimension has a positive weight", () => {
-    const quality = scoreEntity([signal()], config, { asOf: NOW, prior: 50 });
+    const quality = scoreEntity([signal()], config, { now: NOW, prior: 50 });
     expect(composeDimensions({ quality }, {})).toBe(0);
   });
 
   it("treats a prototype-chain dimension key as absent instead of corrupting the composite", () => {
-    const quality = scoreEntity([signal({ tier: "verified", value: 90 })], config, { asOf: NOW, prior: 50 });
+    const quality = scoreEntity([signal({ tier: "verified", value: 90 })], config, { now: NOW, prior: 50 });
     // "constructor" is not an own key of `weights` — old code read the
     // inherited Object constructor function through `weights[key]`, which
     // coerced to NaN in arithmetic and poisoned the whole composite.
@@ -195,7 +195,7 @@ describe("composeDimensions", () => {
   });
 
   it("throws on a non-finite weight instead of silently producing NaN", () => {
-    const quality = scoreEntity([signal()], config, { asOf: NOW, prior: 50 });
+    const quality = scoreEntity([signal()], config, { now: NOW, prior: 50 });
     expect(() => composeDimensions({ quality }, { quality: NaN })).toThrow(RangeError);
     expect(() => composeDimensions({ quality }, { quality: Infinity })).toThrow(RangeError);
   });
@@ -233,7 +233,7 @@ describe("README worked example reproduces exactly", () => {
       },
     ];
     const result = scoreEntity(readmeSignals, readmeConfig, {
-      asOf: "2026-08-01T00:00:00Z",
+      now: "2026-08-01T00:00:00Z",
       prior: 55,
       dial: "balanced",
     });
@@ -257,19 +257,19 @@ describe("prototype-pollution keys are rejected, not silently miscomputed", () =
   });
 
   it("resolveDial rejects a prototype-chain dial name with a clear RangeError, not a raw TypeError", () => {
-    expect(() => scoreEntity([signal()], config, { asOf: NOW, prior: 50, dial: "constructor" as never })).toThrow(
+    expect(() => scoreEntity([signal()], config, { now: NOW, prior: 50, dial: "constructor" as never })).toThrow(
       RangeError,
     );
   });
 
   it("resolveDial rejects an unrecognized preset name", () => {
-    expect(() => scoreEntity([signal()], config, { asOf: NOW, prior: 50, dial: "aggressive" as never })).toThrow(
+    expect(() => scoreEntity([signal()], config, { now: NOW, prior: 50, dial: "aggressive" as never })).toThrow(
       /as_is|balanced|strict/,
     );
   });
 
   it("resolveDial rejects a negative numeric C", () => {
-    expect(() => scoreEntity([signal()], config, { asOf: NOW, prior: 50, dial: -1 })).toThrow(RangeError);
+    expect(() => scoreEntity([signal()], config, { now: NOW, prior: 50, dial: -1 })).toThrow(RangeError);
   });
 });
 
@@ -297,12 +297,34 @@ describe("input validation at the scoring boundary", () => {
   });
 
   it("rejects signals that are not an array", () => {
-    expect(() => scoreEntity("not-an-array" as never, config, { asOf: NOW, prior: 50 })).toThrow(TypeError);
+    expect(() => scoreEntity("not-an-array" as never, config, { now: NOW, prior: 50 })).toThrow(TypeError);
+  });
+
+  it("throws the kit's own TypeError when called without the required options argument, not a raw native error", () => {
+    // Previously `const { now, prior } = options` on an undefined `options`
+    // threw a raw "Cannot destructure property 'now' of 'undefined'" TypeError.
+    expect(() => (scoreEntity as (s: unknown, c: unknown) => unknown)([signal()], config)).toThrow(TypeError);
+    expect(() => (scoreEntity as (s: unknown, c: unknown) => unknown)([signal()], config)).toThrow(/options must be an object/);
+  });
+
+  it("rejects a null options argument the same way", () => {
+    expect(() => scoreEntity([signal()], config, null as never)).toThrow(TypeError);
+  });
+
+  it("accepts a Date for `now`, matching the ISO-string result exactly", () => {
+    const signals = [signal()];
+    const asIso = scoreEntity(signals, config, { now: NOW, prior: 50 });
+    const asDate = scoreEntity(signals, config, { now: new Date(NOW), prior: 50 });
+    expect(asDate).toEqual(asIso);
+  });
+
+  it("rejects an Invalid Date for `now`", () => {
+    expect(() => scoreEntity([signal()], config, { now: new Date("not-a-date"), prior: 50 })).toThrow(RangeError);
   });
 
   it("rejects a prior outside [0, 100] — an out-of-range prior would otherwise let the score escape the documented range", () => {
-    expect(() => scoreEntity([signal()], config, { asOf: NOW, prior: 150 })).toThrow(RangeError);
-    expect(() => scoreEntity([signal()], config, { asOf: NOW, prior: -1 })).toThrow(RangeError);
+    expect(() => scoreEntity([signal()], config, { now: NOW, prior: 150 })).toThrow(RangeError);
+    expect(() => scoreEntity([signal()], config, { now: NOW, prior: -1 })).toThrow(RangeError);
   });
 });
 
@@ -405,7 +427,7 @@ describe("scoreEntity does not mutate its inputs", () => {
   it("leaves the signals array and its objects untouched", () => {
     const signals = [signal({ tier: "verified", value: 90 }), signal({ tier: "new", value: 40 })];
     const before = JSON.parse(JSON.stringify(signals)) as unknown;
-    scoreEntity(signals, config, { asOf: NOW, prior: 50, dial: "balanced" });
+    scoreEntity(signals, config, { now: NOW, prior: 50, dial: "balanced" });
     expect(JSON.parse(JSON.stringify(signals))).toEqual(before);
   });
 
@@ -440,7 +462,7 @@ describe("property: scoring invariants over randomized inputs (seeded)", () => {
       const signals = Array.from({ length: n }, randomSignal);
       const prior = Math.floor(rand() * 101);
       const dial = rand() < 0.5 ? (["as_is", "balanced", "strict"] as const)[Math.floor(rand() * 3)] : rand() * 20;
-      const result = scoreEntity(signals, config, { asOf: NOW, prior, dial });
+      const result = scoreEntity(signals, config, { now: NOW, prior, dial });
       expect(result.score).toBeGreaterThanOrEqual(0);
       expect(result.score).toBeLessThanOrEqual(100);
       if (result.raw !== null) {
@@ -453,7 +475,7 @@ describe("property: scoring invariants over randomized inputs (seeded)", () => {
   it("is deterministic: the same input produces the exact same output every time", () => {
     for (let trial = 0; trial < 20; trial++) {
       const signals = Array.from({ length: 10 }, randomSignal);
-      const opts = { asOf: NOW, prior: 50, dial: "balanced" as const };
+      const opts = { now: NOW, prior: 50, dial: "balanced" as const };
       const a = scoreEntity(signals, config, opts);
       const b = scoreEntity(signals, config, opts);
       expect(a).toEqual(b);
@@ -468,7 +490,7 @@ describe("property: scoring invariants over randomized inputs (seeded)", () => {
         const j = Math.floor(rand() * (i + 1));
         [shuffled[i], shuffled[j]] = [shuffled[j] as IdentifiedSignal, shuffled[i] as IdentifiedSignal];
       }
-      const opts = { asOf: NOW, prior: 50, dial: "balanced" as const };
+      const opts = { now: NOW, prior: 50, dial: "balanced" as const };
       const a = scoreEntity(signals, config, opts);
       const b = scoreEntity(shuffled, config, opts);
       expect(b.nEff).toBe(a.nEff);
@@ -480,7 +502,7 @@ describe("property: scoring invariants over randomized inputs (seeded)", () => {
   it("monotonicity: adding a max-value signal never lowers the score; adding a min-value signal never raises it", () => {
     for (let trial = 0; trial < 100; trial++) {
       const base = Array.from({ length: 1 + Math.floor(rand() * 10) }, randomSignal);
-      const opts = { asOf: NOW, prior: 50, dial: "balanced" as const };
+      const opts = { now: NOW, prior: 50, dial: "balanced" as const };
       const before = scoreEntity(base, config, opts);
 
       const withMax = scoreEntity([...base, signal({ tier: "verified", value: 100 })], config, opts);
@@ -492,7 +514,7 @@ describe("property: scoring invariants over randomized inputs (seeded)", () => {
   });
 
   it("handles empty signals with a defined, prior-equal score and no crash", () => {
-    const result = scoreEntity([], config, { asOf: NOW, prior: 42, dial: "balanced" });
+    const result = scoreEntity([], config, { now: NOW, prior: 42, dial: "balanced" });
     expect(result.raw).toBeNull();
     expect(result.nEff).toBe(0);
     expect(result.score).toBeCloseTo(42, 10);
@@ -503,7 +525,7 @@ describe("property: scoring invariants over randomized inputs (seeded)", () => {
     const many = Array.from({ length: 3000 }, () =>
       signal({ tier: "new", source: "imported", proof: "none", reputation: 1, value: Math.floor(rand() * 101) }),
     );
-    const result = scoreEntity(many, config, { asOf: NOW, prior: 50, dial: "balanced" });
+    const result = scoreEntity(many, config, { now: NOW, prior: 50, dial: "balanced" });
     expect(Number.isFinite(result.score)).toBe(true);
     expect(Number.isFinite(result.nEff)).toBe(true);
     expect(result.score).toBeGreaterThanOrEqual(0);
