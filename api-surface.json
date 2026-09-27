@@ -1,0 +1,39 @@
+{
+  "trust-core": [
+    "TRUST_DIALS",
+    "anonymous",
+    "clamp",
+    "clamp01",
+    "confidenceFromSampleSize",
+    "daysBetween",
+    "identified",
+    "recencyDecay",
+    "resolveDial",
+    "shrinkTowardPrior"
+  ],
+  "trust-core/identified": [
+    "EXAMPLE_IDENTIFIED_CONFIG",
+    "TRUST_DIALS",
+    "composeDimensions",
+    "reputationFactor",
+    "resolveIdentifiedConfig",
+    "scoreEntity",
+    "signalAgeDays",
+    "signalWeight"
+  ],
+  "trust-core/anonymous": [
+    "EXAMPLE_ANONYMOUS_CONFIG",
+    "assessAuthenticity",
+    "resolveAnonymousConfig"
+  ],
+  "trust-core/shared": [
+    "TRUST_DIALS",
+    "clamp",
+    "clamp01",
+    "confidenceFromSampleSize",
+    "daysBetween",
+    "recencyDecay",
+    "resolveDial",
+    "shrinkTowardPrior"
+  ]
+}

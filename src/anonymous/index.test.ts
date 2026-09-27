@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { assessAuthenticity, resolveAnonymousConfig, type AnonymousConfig, type AnonymousSignal } from "./index.js";
+import {
+  assessAuthenticity,
+  EXAMPLE_ANONYMOUS_CONFIG,
+  resolveAnonymousConfig,
+  type AnonymousConfig,
+  type AnonymousSignal,
+} from "./index.js";
+
+/** Deterministic PRNG (mulberry32) so property tests are reproducible. */
+function mulberry32(seed: number): () => number {
+  let s = seed | 0;
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 // Same generic "vendor directory" domain as identified/index.test.ts, but here
 // the signals are unattributed — scraped mentions with no verifiable identity.
@@ -160,5 +177,233 @@ describe("assessAuthenticity — recency and confidence", () => {
     expect(result.flags.lowSourceCount).toBe(false);
     expect(result.flags.uniformSentiment).toBe(false);
     expect(result.components.astroturfPenalty).toBe(0);
+  });
+});
+
+describe("README worked example reproduces exactly", () => {
+  it("matches the exact numbers printed in README.md's anonymous example", () => {
+    // Same config, signals, and options as the README's `anonymous` section.
+    const readmeConfig = resolveAnonymousConfig({
+      sourceWeights: { forum: 0.85, marketplace: 0.5, aggregator: 0.4, blog: 0.6 },
+      weights: { consensus: 0.4, diversity: 0.25, volume: 0.2, recency: 0.15 },
+      astroturfWeight: 0.35,
+      recency: { halfLifeDays: 540, missingDateAgeDays: 540 },
+      volumeSaturation: 12,
+      astroturf: {
+        concentrationSourceCeiling: 1,
+        concentrationPenalty: 0.6,
+        uniformMeanThreshold: 0.85,
+        uniformVarianceThreshold: 0.02,
+        uniformPenalty: 0.4,
+        minSignalsForUniformCheck: 3,
+      },
+      confidence: { high: 6, moderate: 3 },
+    });
+    const readmeSignals: AnonymousSignal[] = [
+      { id: "s1", source: "forum", sentiment: 0.7, confidence: 0.9, publishedAt: "2026-07-01T00:00:00Z" },
+      { id: "s2", source: "marketplace", sentiment: 0.4, confidence: 0.8, publishedAt: "2026-06-15T00:00:00Z" },
+      { id: "s3", source: "blog", sentiment: 0.8, confidence: 0.85, publishedAt: "2026-05-20T00:00:00Z" },
+    ];
+    const verdict = assessAuthenticity(readmeSignals, readmeConfig, { now: "2026-08-01T00:00:00Z" });
+
+    expect(verdict.trustScore).toBe(83);
+    expect(verdict.components.consensus).toBeCloseTo(0.8288923795049216, 9);
+    expect(verdict.components.diversity).toBe(1);
+    expect(verdict.components.volume).toBeCloseTo(0.5404763088546395, 9);
+    expect(verdict.components.recency).toBeCloseTo(0.9380486285411919, 9);
+    expect(verdict.components.astroturfPenalty).toBe(0);
+    expect(verdict.confidence).toEqual({ level: "moderate", effectiveSampleSize: 3 });
+    expect(verdict.explanation).toBe("Trust 83/100 across 3 independent sources. Sentiment is strongly positive.");
+  });
+});
+
+describe("prototype-pollution keys are rejected, not silently miscomputed", () => {
+  it("treats a source type named 'constructor' as unweighted (0), instead of NaN-poisoning consensus", () => {
+    // Old code read `config.sourceWeights["constructor"]`, which resolved to
+    // the inherited Object constructor function through the prototype chain
+    // (not `undefined`), so `?? 0` never kicked in and the weight became NaN.
+    const polluted = [sig("constructor", 0.9), sig("forum", 0.5)];
+    const result = assessAuthenticity(polluted, config, { now: NOW });
+    expect(Number.isNaN(result.trustScore)).toBe(false);
+    expect(result.trustScore).toBeGreaterThanOrEqual(0);
+    expect(result.trustScore).toBeLessThanOrEqual(100);
+  });
+
+  it("rejects an unrecognized dial-like prototype key in the weights config at construction time", () => {
+    expect(() => resolveAnonymousConfig({ weights: { constructor: 1 } as never })).toThrow(TypeError);
+  });
+});
+
+describe("input validation at the assessment boundary", () => {
+  it("rejects sentiment outside [-1, 1]", () => {
+    expect(() => assessAuthenticity([sig("forum", 1.5)], config, { now: NOW })).toThrow(RangeError);
+    expect(() => assessAuthenticity([sig("forum", -1.5)], config, { now: NOW })).toThrow(RangeError);
+  });
+
+  it("rejects a NaN sentiment instead of letting it poison the mean/variance", () => {
+    expect(() => assessAuthenticity([sig("forum", Number.NaN)], config, { now: NOW })).toThrow(RangeError);
+  });
+
+  it("rejects confidence outside [0, 1]", () => {
+    expect(() => assessAuthenticity([sig("forum", 0.5, { confidence: 1.5 })], config, { now: NOW })).toThrow(
+      RangeError,
+    );
+  });
+
+  it("rejects a non-ISO publishedAt", () => {
+    expect(() => assessAuthenticity([sig("forum", 0.5, { publishedAt: "June 1, 2026" })], config, { now: NOW })).toThrow();
+  });
+
+  it("rejects signals that are not an array", () => {
+    expect(() => assessAuthenticity("nope" as never, config, { now: NOW })).toThrow(TypeError);
+  });
+
+  it("accepts boundary sentiment values -1 and 1 without throwing", () => {
+    expect(() => assessAuthenticity([sig("forum", 1), sig("marketplace", -1)], config, { now: NOW })).not.toThrow();
+  });
+});
+
+describe("resolveAnonymousConfig — configuration validation", () => {
+  it("rejects a negative source weight", () => {
+    expect(() => resolveAnonymousConfig({ sourceWeights: { forum: -0.1 } })).toThrow(RangeError);
+  });
+
+  it("rejects NaN/Infinity in the positive-composite weights", () => {
+    expect(() => resolveAnonymousConfig({ weights: { consensus: Number.NaN } as never })).toThrow(RangeError);
+    expect(() => resolveAnonymousConfig({ weights: { volume: Number.POSITIVE_INFINITY } as never })).toThrow(
+      RangeError,
+    );
+  });
+
+  it("rejects a negative weight in the positive composite", () => {
+    expect(() => resolveAnonymousConfig({ weights: { consensus: -0.5 } as never })).toThrow(RangeError);
+  });
+
+  it("rejects an unknown top-level key (a typo)", () => {
+    expect(() => resolveAnonymousConfig({ sourceWeight: { forum: 0.5 } } as never)).toThrow(TypeError);
+  });
+
+  it("rejects an unknown key inside astroturf rules", () => {
+    expect(() => resolveAnonymousConfig({ astroturf: { concentrationCeiling: 1 } as never })).toThrow(TypeError);
+  });
+
+  it("rejects volumeSaturation <= 0", () => {
+    expect(() => resolveAnonymousConfig({ volumeSaturation: 0 })).toThrow(RangeError);
+    expect(() => resolveAnonymousConfig({ volumeSaturation: -5 })).toThrow(RangeError);
+  });
+
+  it("rejects confidence.moderate greater than confidence.high", () => {
+    expect(() => resolveAnonymousConfig({ confidence: { high: 2, moderate: 8 } })).toThrow(RangeError);
+  });
+
+  it("weights need not sum to 1 (README: 'normalized implicitly by how you set them', not divided by their sum)", () => {
+    // Confirms the documented behavior directly: halving every weight halves
+    // the positive composite pre-clamp, rather than the result being
+    // renormalized back to the same trustScore.
+    const half = resolveAnonymousConfig({ weights: { consensus: 0.2, diversity: 0.125, volume: 0.1, recency: 0.075 } });
+    const full = resolveAnonymousConfig({ weights: { consensus: 0.4, diversity: 0.25, volume: 0.2, recency: 0.15 } });
+    const signals = [sig("forum", 0.6), sig("marketplace", 0.5)];
+    const halfResult = assessAuthenticity(signals, half, { now: NOW });
+    const fullResult = assessAuthenticity(signals, full, { now: NOW });
+    expect(halfResult.trustScore).toBeLessThan(fullResult.trustScore);
+  });
+});
+
+describe("exported configuration objects are frozen against mutation", () => {
+  it("EXAMPLE_ANONYMOUS_CONFIG cannot be mutated, directly or through a nested weight map", () => {
+    expect(Object.isFrozen(EXAMPLE_ANONYMOUS_CONFIG)).toBe(true);
+    expect(Object.isFrozen(EXAMPLE_ANONYMOUS_CONFIG.sourceWeights)).toBe(true);
+    expect(() => {
+      EXAMPLE_ANONYMOUS_CONFIG.sourceWeights.forum = 999;
+    }).toThrow(TypeError);
+    expect(resolveAnonymousConfig().sourceWeights.forum).toBe(0.85);
+  });
+
+  it("a resolved config is itself frozen", () => {
+    const cfg = resolveAnonymousConfig({ sourceWeights: { niche: 0.5 } });
+    expect(Object.isFrozen(cfg)).toBe(true);
+    expect(Object.isFrozen(cfg.sourceWeights)).toBe(true);
+  });
+});
+
+describe("assessAuthenticity does not mutate its inputs", () => {
+  it("leaves the signals array and its objects untouched", () => {
+    const signals = [sig("forum", 0.7), sig("marketplace", 0.4)];
+    const before = JSON.parse(JSON.stringify(signals)) as unknown;
+    assessAuthenticity(signals, config, { now: NOW });
+    expect(JSON.parse(JSON.stringify(signals))).toEqual(before);
+  });
+});
+
+describe("property: authenticity invariants over randomized inputs (seeded)", () => {
+  const rand = mulberry32(20260924);
+  const sourceTypes = ["forum", "marketplace", "aggregator", "blog"] as const;
+
+  function randomSignal(): AnonymousSignal {
+    return sig(sourceTypes[Math.floor(rand() * sourceTypes.length)]!, rand() * 2 - 1, {
+      confidence: rand(),
+      publishedAt: rand() < 0.2 ? null : `202${Math.floor(rand() * 6)}-0${1 + Math.floor(rand() * 9)}-15T00:00:00Z`,
+    });
+  }
+
+  it("trustScore always stays within the documented [0, 100] range", () => {
+    for (let trial = 0; trial < 200; trial++) {
+      const n = Math.floor(rand() * 15);
+      const signals = Array.from({ length: n }, randomSignal);
+      const result = assessAuthenticity(signals, config, { now: NOW });
+      expect(result.trustScore).toBeGreaterThanOrEqual(0);
+      expect(result.trustScore).toBeLessThanOrEqual(100);
+      expect(Number.isInteger(result.trustScore)).toBe(true);
+    }
+  });
+
+  it("is deterministic: the same input produces the exact same output every time", () => {
+    for (let trial = 0; trial < 20; trial++) {
+      const signals = Array.from({ length: 10 }, randomSignal);
+      const a = assessAuthenticity(signals, config, { now: NOW });
+      const b = assessAuthenticity(signals, config, { now: NOW });
+      expect(a).toEqual(b);
+    }
+  });
+
+  it("is order-independent: shuffling the signals does not change any component, even in the last bit", () => {
+    for (let trial = 0; trial < 20; trial++) {
+      const signals = Array.from({ length: 30 }, randomSignal);
+      const shuffled = [...signals];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j] as AnonymousSignal, shuffled[i] as AnonymousSignal];
+      }
+      const a = assessAuthenticity(signals, config, { now: NOW });
+      const b = assessAuthenticity(shuffled, config, { now: NOW });
+      expect(b.components).toEqual(a.components);
+      expect(b.trustScore).toBe(a.trustScore);
+    }
+  });
+
+  it("consensus monotonicity: adding a maximum-sentiment signal never lowers consensus", () => {
+    for (let trial = 0; trial < 100; trial++) {
+      const base = Array.from({ length: 1 + Math.floor(rand() * 10) }, randomSignal);
+      const before = assessAuthenticity(base, config, { now: NOW });
+      const after = assessAuthenticity([...base, sig("forum", 1)], config, { now: NOW });
+      expect(after.components.consensus).toBeGreaterThanOrEqual(before.components.consensus);
+    }
+  });
+
+  it("handles empty signals with a defined score and no crash", () => {
+    const result = assessAuthenticity([], config, { now: NOW });
+    expect(result.sourceCount).toBe(0);
+    expect(result.signalCount).toBe(0);
+    expect(Number.isFinite(result.trustScore)).toBe(true);
+    expect(result.trustScore).toBeGreaterThanOrEqual(0);
+    expect(result.trustScore).toBeLessThanOrEqual(100);
+  });
+
+  it("stays numerically well-behaved with a large number of signals (no NaN/Infinity)", () => {
+    const many = Array.from({ length: 3000 }, randomSignal);
+    const result = assessAuthenticity(many, config, { now: NOW });
+    expect(Number.isFinite(result.trustScore)).toBe(true);
+    expect(Number.isFinite(result.components.consensus)).toBe(true);
+    expect(Number.isFinite(result.components.recency)).toBe(true);
   });
 });
