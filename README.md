@@ -18,6 +18,11 @@ npm install trust-core
 
 Or build from source: clone the repository and run `npm install && npm run build`.
 
+This is an ESM package (`"type": "module"`). `import` works everywhere; plain
+CommonJS `require("trust-core")` also works, but only on a Node version that
+supports `require(esm)` — Node 22.12+ or 20.19+. On an older Node, use
+dynamic `import()` from CommonJS instead.
+
 ## `identified` — score known contributors
 
 ```ts
@@ -57,7 +62,7 @@ const signals: identified.IdentifiedSignal[] = [
 ];
 
 const result = identified.scoreEntity(signals, config, {
-  asOf: "2026-08-01T00:00:00Z",
+  now: "2026-08-01T00:00:00Z", // a strict ISO 8601 string, or a `Date`
   prior: 55, // the category baseline — e.g. the pooled mean across all vendors
   dial: "balanced", // "as_is" | "balanced" | "strict", or a raw number
 });
@@ -71,22 +76,22 @@ result.contributions; // per-signal weight breakdown, heaviest first
 
 This is the actual output of the snippet above, run against the built package — `r1`'s verified/direct/receipt/reputation-85 profile outweighs `r2`'s new/imported/none profile by about 20 to 1, but neither is enough evidence (`nEff` of 1.38, versus a `balanced` dial strength of 4) to move the score far from the 55 prior.
 
-`scoreEntity` validates as it goes: `value` and `reputation` must be in `[0, 100]` (or `null` for reputation), `occurredAt`/`asOf` must be strict ISO 8601 timestamps, `prior` must be in `[0, 100]`, and `dial` must be a known preset name or a finite number `>= 0`. A signal referencing a `tier`/`source`/`proof` with no configured weight — including a prototype property name like `"constructor"`, which is treated as absent rather than silently resolving to a non-numeric value — throws too. Every one of these throws a `TypeError` (wrong type) or `RangeError` (right type, bad value) instead of letting a bad input quietly turn into a `NaN` or out-of-range score.
+`scoreEntity` validates as it goes: `options` must be an object with a `now`, `value` and `reputation` must be in `[0, 100]` (or `null` for reputation), `occurredAt`/`now` must be a strict ISO 8601 timestamp (`now` also accepts a `Date`), `prior` must be in `[0, 100]`, and `dial` must be a known preset name or a finite number `>= 0`. A signal referencing a `tier`/`source`/`proof` with no configured weight — including a prototype property name like `"constructor"`, which is treated as absent rather than silently resolving to a non-numeric value — throws too. Every one of these throws a `TypeError` (wrong type) or `RangeError` (right type, bad value) instead of letting a bad input quietly turn into a `NaN` or out-of-range score.
 
 The trust dial controls how hard a score is pulled toward the prior when evidence is thin:
 
 ```ts
-identified.scoreEntity(signals, config, { asOf, prior: 55, dial: "as_is" });   // trust the numbers
-identified.scoreEntity(signals, config, { asOf, prior: 55, dial: "balanced" }); // sensible default
-identified.scoreEntity(signals, config, { asOf, prior: 55, dial: "strict" });  // demand deep evidence
-identified.scoreEntity(signals, config, { asOf, prior: 55, dial: 6 });        // or your own C
+identified.scoreEntity(signals, config, { now, prior: 55, dial: "as_is" });   // trust the numbers
+identified.scoreEntity(signals, config, { now, prior: 55, dial: "balanced" }); // sensible default
+identified.scoreEntity(signals, config, { now, prior: 55, dial: "strict" });  // demand deep evidence
+identified.scoreEntity(signals, config, { now, prior: 55, dial: 6 });        // or your own C
 ```
 
 Scoring more than one dimension (quality, reliability, communication) for the same entity — call `scoreEntity` once per dimension, then combine:
 
 ```ts
-const quality = identified.scoreEntity(qualitySignals, config, { asOf, prior: 60 });
-const reliability = identified.scoreEntity(reliabilitySignals, config, { asOf, prior: 70 });
+const quality = identified.scoreEntity(qualitySignals, config, { now, prior: 60 });
+const reliability = identified.scoreEntity(reliabilitySignals, config, { now, prior: 70 });
 
 const composite = identified.composeDimensions(
   { quality, reliability },
@@ -140,7 +145,7 @@ The astroturf penalty fires on either of two conditions, and either is enough to
 - **Concentration** — the evidence comes from too few independent sources (`sourceCount <= concentrationSourceCeiling`).
 - **Uniformity** — sentiment is near-maximal with near-zero variance (`mean > uniformMeanThreshold && variance < uniformVarianceThreshold`) — no organic dissent, the fingerprint of copy-pasted or purchased praise.
 
-`assessAuthenticity` validates as it goes: `sentiment` must be in `[-1, 1]`, `confidence` in `[0, 1]`, and `publishedAt`/`now` must be strict ISO 8601 timestamps. A signal's `source` with no configured weight (including a prototype property name like `"constructor"`) is treated as an unweighted, unclassified source — the documented `0`-credibility default — rather than resolving to a non-numeric value. Every validation failure throws a `TypeError` or `RangeError` instead of letting a bad input quietly corrupt `trustScore`.
+`assessAuthenticity` validates as it goes: `options` must be an object with a `now`, `sentiment` must be in `[-1, 1]`, `confidence` in `[0, 1]`, and `publishedAt`/`now` must be a strict ISO 8601 timestamp (`now` also accepts a `Date`). A signal's `source` with no configured weight (including a prototype property name like `"constructor"`) is treated as an unweighted, unclassified source — the documented `0`-credibility default — rather than resolving to a non-numeric value. Every validation failure throws a `TypeError` or `RangeError` instead of letting a bad input quietly corrupt `trustScore`.
 
 The four `weights` (`consensus`/`diversity`/`volume`/`recency`) do **not** need to sum to 1 and are **not** normalized — they're used exactly as given in the weighted sum, so halving every weight halves the pre-penalty composite rather than leaving `trustScore` unchanged. Summing to 1 is just what keeps the composite intuitively readable as a 0-100 scale; it isn't enforced.
 
@@ -171,7 +176,9 @@ Both `scoreEntity` and `assessAuthenticity` are pure functions: no `Date.now()`,
 
 ## Relationship to sibling kits
 
-trust-core scores *who* or *what pattern of signals* to trust — a contributor, or a corpus of anonymous sentiment about an entity. It does not evaluate whether any specific written claim is corroborated by evidence; for that, see `corroboration-kit`, which grades one claim at a time against the evidence signals collected for it. The two compose naturally (e.g. a claim's evidence signals could themselves be weighted by the credibility of the contributor who supplied them, using `identified`), but trust-core does not depend on or import from it.
+trust-core scores *who* or *what pattern of signals* to trust — a contributor, or a corpus of anonymous sentiment about an entity. It does not evaluate whether any specific written claim is corroborated by evidence; for that, see [`corroboration-kit`](https://github.com/lkopietz3-byte/corroboration-kit), which grades one claim at a time against the evidence signals collected for it. The two compose naturally (e.g. a claim's evidence signals could themselves be weighted by the credibility of the contributor who supplied them, using `identified`), but trust-core does not depend on or import from it.
+
+Both `scoreEntity`'s and `assessAuthenticity`'s clock option is named `now` (accepting a strict ISO 8601 string or a `Date`), matching [`claims-registry-kit`](https://github.com/lkopietz3-byte/claims-registry-kit) and [`freshness-kit`](https://github.com/lkopietz3-byte/freshness-kit). Earlier versions of this README called `identified`'s option `asOf`; it was renamed before the first publish for consistency across both modules and the sibling kits above.
 
 ## Development
 
