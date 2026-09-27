@@ -5,7 +5,7 @@ Mapped on **2026-09-26** from connected GitHub, Vercel, and Supabase metadata. T
 ## Identity and repository settings
 
 - Repository: [lkopietz3-byte/trust-core](https://github.com/lkopietz3-byte/trust-core)
-- Purpose: A library of deterministic trust scoring functions for known reviewers and authenticity assessment for anonymous signals.
+- Purpose: A library that scores caller-supplied signals from identified and anonymous reviewers and flags selected suspicious patterns. Its scores do not verify contributors or establish authenticity.
 - GitHub visibility: **private**; default branch: **`main`**; archived: **no**.
 - Product stage, owner, production health, and GitHub protection/settings beyond the fields above: **not verified**.
 
