@@ -12,7 +12,7 @@
  * Every function takes whatever "now" it needs as an explicit ISO string.
  */
 
-import { checkNumber, deepFreeze, hasOwn, show } from "./internal.js";
+import { assertFinite, checkNumber, checkThresholds, checkTimestamp, deepFreeze, hasOwn, show } from "./internal.js";
 
 // ---------------------------------------------------------------------------
 // Bounding
@@ -51,10 +51,19 @@ export type Weight = number;
  * is deliberate: {@link recencyDecay} is a continuous exponential curve, and
  * rounding here would introduce needless day-sized steps in it. Can be
  * negative when `toISO` is earlier than `fromISO`.
+ *
+ * Both arguments use the strict timestamp grammar of the scoring functions'
+ * clocks: `YYYY-MM-DD` (read as midnight UTC) or a date-time with an explicit
+ * `Z` or `+HH:MM` offset. A zone-less date-time is rejected instead of being
+ * read in the process's local zone, and an impossible date such as
+ * `2026-02-30` is rejected instead of rolling forward.
+ *
+ * @throws TypeError if either argument is not a string.
+ * @throws RangeError if either string is not a valid timestamp in that grammar.
  */
 export function daysBetween(fromISO: string, toISO: string): number {
   const MS_PER_DAY = 24 * 60 * 60 * 1000;
-  return (Date.parse(toISO) - Date.parse(fromISO)) / MS_PER_DAY;
+  return (checkTimestamp(toISO, "toISO") - checkTimestamp(fromISO, "fromISO")) / MS_PER_DAY;
 }
 
 /**
@@ -62,8 +71,17 @@ export function daysBetween(fromISO: string, toISO: string): number {
  * `halfLifeDays`. Both modules use this — identified signals decay by how
  * long ago the underlying event happened; anonymous signals decay by how
  * long ago the material was published.
+ *
+ * A negative `ageDays` counts as age 0 (full weight). `halfLifeDays <= 0`
+ * means instant decay: full weight at age 0, none after. `Infinity` for
+ * `halfLifeDays` means never decays.
+ *
+ * @throws TypeError if either argument is not a number.
+ * @throws RangeError if either argument is `NaN`.
  */
 export function recencyDecay(ageDays: number, halfLifeDays: number): number {
+  checkNumber(ageDays, "ageDays", { allowInfinity: true });
+  checkNumber(halfLifeDays, "halfLifeDays", { allowInfinity: true });
   if (halfLifeDays <= 0) return ageDays <= 0 ? 1 : 0;
   return Math.pow(0.5, Math.max(0, ageDays) / halfLifeDays);
 }
@@ -85,6 +103,10 @@ export function recencyDecay(ageDays: number, halfLifeDays: number): number {
  * gets `prior` back rather than `NaN` from a `0 / 0` when there is also no
  * evidence. As `totalWeight` grows past `dial`, the result converges on the
  * unshrunk weighted mean.
+ *
+ * @throws RangeError if any input is `NaN` or infinite, or if the denominator,
+ *   the `dial * prior` term, the numerator or the quotient overflows. It never
+ *   returns `NaN`, `Infinity`, or a value that overflow has silently distorted.
  */
 export function shrinkTowardPrior(
   weightedSum: number,
@@ -92,8 +114,10 @@ export function shrinkTowardPrior(
   prior: number,
   dial: number,
 ): number {
-  const denominator = totalWeight + dial;
-  return denominator > 0 ? (weightedSum + dial * prior) / denominator : prior;
+  const denominator = assertFinite(totalWeight + dial, "shrinkage denominator (totalWeight + dial)");
+  const priorTerm = assertFinite(dial * prior, "shrinkage prior term (dial * prior)");
+  const numerator = assertFinite(weightedSum + priorTerm, "shrinkage numerator (weightedSum + dial * prior)");
+  return denominator > 0 ? assertFinite(numerator / denominator, "shrunk score") : prior;
 }
 
 /**
@@ -175,16 +199,20 @@ export interface Confidence {
   effectiveSampleSize: number;
 }
 
-/** Derive a confidence label from an effective sample size and its thresholds. */
+/**
+ * Derive a confidence label from an effective sample size and its thresholds.
+ *
+ * @throws TypeError if `effectiveSampleSize` is not a number or `thresholds`
+ *   is not an object with exactly `high` and `moderate`.
+ * @throws RangeError if `effectiveSampleSize` is `NaN` or negative, or the
+ *   thresholds are `NaN`, negative, or `moderate > high`.
+ */
 export function confidenceFromSampleSize(
   effectiveSampleSize: number,
   thresholds: ConfidenceThresholds,
 ): Confidence {
-  const level: ConfidenceLevel =
-    effectiveSampleSize >= thresholds.high
-      ? "high"
-      : effectiveSampleSize >= thresholds.moderate
-        ? "moderate"
-        : "thin";
-  return { level, effectiveSampleSize };
+  const n = checkNumber(effectiveSampleSize, "effectiveSampleSize", { min: 0, allowInfinity: true });
+  const { high, moderate } = checkThresholds(thresholds, "thresholds");
+  const level: ConfidenceLevel = n >= high ? "high" : n >= moderate ? "moderate" : "thin";
+  return { level, effectiveSampleSize: n };
 }

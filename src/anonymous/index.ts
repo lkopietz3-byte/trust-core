@@ -43,6 +43,7 @@ import {
   checkThresholds,
   checkTimestamp,
   checkWeightMap,
+  assertFinite,
   deepFreeze,
   exactSum,
   hasOwn,
@@ -344,13 +345,16 @@ export function assessAuthenticity(
 
   const { penalty: astroturfPenalty, flags } = computeAstroturfPenalty(signals, sourceCount, config.astroturf);
 
-  const positive =
+  const positive = assertFinite(
     config.weights.consensus * consensus +
-    config.weights.diversity * diversity +
-    config.weights.volume * volume +
-    config.weights.recency * recency;
+      config.weights.diversity * diversity +
+      config.weights.volume * volume +
+      config.weights.recency * recency,
+    "positive composite",
+  );
+  const penaltyTerm = assertFinite(config.astroturfWeight * astroturfPenalty, "astroturf penalty term");
 
-  const trustScore = Math.round(100 * clamp01(positive - config.astroturfWeight * astroturfPenalty));
+  const trustScore = Math.round(100 * clamp01(positive - penaltyTerm));
 
   const components: AuthenticityComponents = { consensus, diversity, volume, recency, astroturfPenalty };
 

@@ -40,6 +40,21 @@ export function show(value: unknown): string {
 // Number validation
 // ---------------------------------------------------------------------------
 
+/**
+ * Return `value` if it is a finite number; otherwise throw `RangeError`.
+ * Used on DERIVED values (a product of weights, a shrinkage term, a sum) that
+ * can overflow or become `NaN` even when every input was individually valid.
+ * `what` names the derived quantity in the message.
+ */
+export function assertFinite(value: number, what: string): number {
+  if (!Number.isFinite(value)) {
+    throw new RangeError(
+      `trust-core: ${what} is not a finite number (got ${show(value)}); an input is too large for double-precision arithmetic`,
+    );
+  }
+  return value;
+}
+
 export interface NumberRules {
   /** Inclusive lower bound (exclusive when `minExclusive`). */
   min?: number;
@@ -259,13 +274,14 @@ export function checkTimestamp(value: unknown, label: string): number {
  * rounded value of the exact real sum, so it depends only on WHICH numbers are
  * summed, never on their order, and it does not drift as the count grows.
  *
- * Inputs must be finite (callers validate first). Throws `RangeError` if an
- * intermediate value overflows to infinity. An empty list sums to `0`.
+ * Throws `RangeError` if any term is not finite (a lone `Infinity` or `NaN` is
+ * rejected too, not just one that overflows mid-sum) or if an intermediate
+ * value overflows to infinity. An empty list sums to `0`.
  */
 export function exactSum(values: readonly number[]): number {
   const partials: number[] = [];
   for (const value of values) {
-    let x = value;
+    let x = assertFinite(value, "a term being summed");
     let used = 0;
     for (let j = 0; j < partials.length; j++) {
       let y = partials[j] as number;

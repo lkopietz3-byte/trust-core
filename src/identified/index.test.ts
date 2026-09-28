@@ -532,3 +532,70 @@ describe("property: scoring invariants over randomized inputs (seeded)", () => {
     expect(result.score).toBeLessThanOrEqual(100);
   });
 });
+
+describe("derived values must stay finite or throw RangeError (TC-001)", () => {
+  const bigConfig = resolveIdentifiedConfig({
+    tierWeights: { big: Number.MAX_VALUE, one: 1 },
+    sourceWeights: { big: Number.MAX_VALUE, one: 1 },
+    proofWeights: { one: 1 },
+    reputation: { floor: 1, ceil: 1, neutral: 1 },
+    recency: { halfLifeDays: Infinity, missingDateAgeDays: 0 },
+  });
+  const one = (overrides: Partial<IdentifiedSignal> = {}): IdentifiedSignal =>
+    signal({ tier: "one", source: "one", proof: "one", value: 50, ...overrides });
+
+  it("rejects a signal whose multiplied weight overflows to Infinity (audit R08)", () => {
+    expect(() => scoreEntity([one({ tier: "big", source: "big" })], bigConfig, { now: NOW, prior: 50 })).toThrow(
+      RangeError,
+    );
+    expect(() => signalWeight(one({ tier: "big", source: "big" }), bigConfig, NOW)).toThrow(RangeError);
+  });
+
+  it("rejects an overflowing weight even when a later factor is 0 (Infinity * 0 would be NaN)", () => {
+    const decaying = resolveIdentifiedConfig({
+      tierWeights: { big: Number.MAX_VALUE },
+      sourceWeights: { big: Number.MAX_VALUE },
+      proofWeights: { one: 1 },
+      recency: { halfLifeDays: 0, missingDateAgeDays: 0 },
+    });
+    expect(() =>
+      scoreEntity([one({ tier: "big", source: "big", occurredAt: "2020-01-01" })], decaying, { now: NOW, prior: 50 }),
+    ).toThrow(RangeError);
+  });
+
+  it("rejects a weight * value product that overflows", () => {
+    expect(() => scoreEntity([one({ tier: "big", value: 100 })], bigConfig, { now: NOW, prior: 50 })).toThrow(
+      RangeError,
+    );
+  });
+
+  it("rejects a dial that makes the prior term overflow instead of clamping the score to 100 (audit R09)", () => {
+    expect(() => scoreEntity([one()], bigConfig, { now: NOW, prior: 50, dial: Number.MAX_VALUE })).toThrow(
+      RangeError,
+    );
+  });
+
+  it("rejects a weight sum that overflows across signals", () => {
+    const signals = [one({ tier: "big" }), one({ tier: "big" })];
+    expect(() => scoreEntity(signals, bigConfig, { now: NOW, prior: 50 })).toThrow(RangeError);
+  });
+
+  it("still accepts large finite weights and returns the ordinary weighted result", () => {
+    const result = scoreEntity([one({ tier: "big", value: 1 })], bigConfig, { now: NOW, prior: 50 });
+    expect(result.nEff).toBe(Number.MAX_VALUE);
+    expect(result.raw).toBeCloseTo(1, 10);
+    expect(result.score).toBeCloseTo(1, 10);
+  });
+
+  it("composeDimensions rejects a weight*score product that overflows", () => {
+    const s = scoreEntity([one()], bigConfig, { now: NOW, prior: 50 });
+    expect(() => composeDimensions({ a: s }, { a: Number.MAX_VALUE })).toThrow(RangeError);
+  });
+
+  it("composeDimensions rejects a dimension score that is not a finite number in [0, 100]", () => {
+    const s = scoreEntity([one()], bigConfig, { now: NOW, prior: 50 });
+    expect(() => composeDimensions({ a: { ...s, score: Number.NaN } }, { a: 1 })).toThrow(RangeError);
+    expect(() => composeDimensions({ a: { ...s, score: 101 } }, { a: 1 })).toThrow(RangeError);
+    expect(() => composeDimensions({ a: null as never }, { a: 1 })).toThrow(TypeError);
+  });
+});

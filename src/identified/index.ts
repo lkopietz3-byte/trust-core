@@ -44,10 +44,12 @@ import {
   checkThresholds,
   checkTimestamp,
   checkWeightMap,
+  assertFinite,
   deepFreeze,
   exactSum,
   hasOwn,
   rejectUnknownKeys,
+  show,
 } from "../shared/internal.js";
 
 export { TRUST_DIALS, type TrustDial, type TrustDialPreset } from "../shared/types.js";
@@ -246,7 +248,7 @@ export function signalWeight(signal: IdentifiedSignal, config: IdentifiedConfig,
   const reputation = reputationFactor(signal.reputation, config.reputation);
   const age = signalAgeDays(signal.occurredAt, asOf, config.recency);
   const recency = recencyDecay(age, config.recency.halfLifeDays);
-  return tier * source * proof * reputation * recency;
+  return assertFinite(tier * source * proof * reputation * recency, `weight of signal ${show(signal.id)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +329,7 @@ export function scoreEntity(
   for (const signal of signals) {
     const weight = signalWeight(signal, config, now);
     weights.push(weight);
-    weightedValues.push(weight * signal.value);
+    weightedValues.push(assertFinite(weight * signal.value, `weighted value of signal ${show(signal.id)}`));
     contributions.push({
       id: signal.id,
       tier: signal.tier,
@@ -375,11 +377,13 @@ export function composeDimensions(
   checkRecord(weights, "weights");
   const numerators: number[] = [];
   const denominators: number[] = [];
-  for (const [key, score] of Object.entries(scores)) {
+  for (const [key, entry] of Object.entries(scores)) {
     const w = hasOwn(weights, key) ? weights[key]! : 0;
     checkNumber(w, `weights[${JSON.stringify(key)}]`, {});
+    const dimension = checkRecord(entry, `scores[${JSON.stringify(key)}]`);
+    const dimensionScore = checkNumber(dimension.score, `scores[${JSON.stringify(key)}].score`, { min: 0, max: 100 });
     if (w <= 0) continue;
-    numerators.push(w * score.score);
+    numerators.push(assertFinite(w * dimensionScore, `weighted score of dimension ${show(key)}`));
     denominators.push(w);
   }
   const den = exactSum(denominators);

@@ -429,3 +429,36 @@ describe("property: authenticity invariants over randomized inputs (seeded)", ()
     expect(Number.isFinite(result.components.recency)).toBe(true);
   });
 });
+
+describe("derived values must stay finite or throw RangeError (TC-001)", () => {
+  const good = [sig("forum", 0.5), sig("blog", 0.2), sig("marketplace", 0.1)];
+
+  it("rejects a positive composite that overflows instead of reporting a plausible 100", () => {
+    const huge = resolveAnonymousConfig({
+      weights: { consensus: Number.MAX_VALUE, diversity: Number.MAX_VALUE, volume: 0, recency: 0 },
+    });
+    expect(() => assessAuthenticity(good, huge, { now: NOW })).toThrow(RangeError);
+  });
+
+  it("rejects Infinity - Infinity instead of returning a NaN trustScore", () => {
+    const huge = resolveAnonymousConfig({
+      weights: { consensus: Number.MAX_VALUE, diversity: Number.MAX_VALUE, volume: 0, recency: 0 },
+      astroturfWeight: Number.MAX_VALUE,
+    });
+    const flagged = [sig("forum", 0.95), sig("forum", 0.95), sig("forum", 0.95)];
+    expect(() => assessAuthenticity(flagged, huge, { now: NOW })).toThrow(RangeError);
+  });
+
+  it("rejects source credibility weights whose sum overflows", () => {
+    const heavy = resolveAnonymousConfig({ sourceWeights: { forum: Number.MAX_VALUE, blog: Number.MAX_VALUE } });
+    expect(() =>
+      assessAuthenticity([sig("forum", 0.5, { confidence: 1 }), sig("blog", 0.5, { confidence: 1 })], heavy, { now: NOW }),
+    ).toThrow(RangeError);
+  });
+
+  it("still accepts one very large but finite credibility weight", () => {
+    const heavy = resolveAnonymousConfig({ sourceWeights: { forum: Number.MAX_VALUE } });
+    const r = assessAuthenticity([sig("forum", 0.5, { confidence: 1 })], heavy, { now: NOW });
+    expect(Number.isFinite(r.trustScore)).toBe(true);
+  });
+});
