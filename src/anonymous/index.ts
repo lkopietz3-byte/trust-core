@@ -285,26 +285,35 @@ export interface AuthenticityComponents {
   diversity: number;
   volume: number;
   recency: number;
-  /** `[0, 1]` — higher means more evidence of manipulation. */
+  /** `[0, 1]` — higher means a stronger pattern the heuristics discount. */
   astroturfPenalty: number;
 }
 
 export interface AstroturfFlags {
-  /** True when the evidence is concentrated in too few independent sources. */
+  /** True when the eligible evidence comes from too few distinct source types. */
   lowSourceCount: boolean;
-  /** True when sentiment is near-maximal with near-zero variance — the planted-praise fingerprint. */
+  /** True when sentiment is near-maximal with near-zero variance. A pattern in the numbers, not a finding about any observation. */
   uniformSentiment: boolean;
 }
 
 export interface AuthenticityAssessment {
-  /** 0-100. */
+  /**
+   * 0-100. When `confidence.level` is `"insufficient"` this is 0 by convention:
+   * it means "no usable evidence", not "measured as untrustworthy". Check the
+   * confidence level before reading the score.
+   */
   trustScore: number;
   components: AuthenticityComponents;
+  /** Distinct source types among ELIGIBLE observations. The source strings are caller-supplied labels; nothing verifies they are independent publishers. */
   sourceCount: number;
+  /** How many observations were submitted (including ineligible ones). */
   signalCount: number;
+  /** How many observations were eligible: confidence above 0 AND a source type with credibility above 0. Only these contribute to any other field. */
+  eligibleSignalCount: number;
   flags: AstroturfFlags;
+  /** `effectiveSampleSize` is `sourceCount`. `level` is `"insufficient"` (with a `reason`) when no observation is eligible. */
   confidence: Confidence;
-  /** Plain-English summary, safe to show a user under the score. */
+  /** A plain-language summary of patterns and uncertainty. It states no conclusion about whether any observation is genuine, and does not say the sources are independent. */
   explanation: string;
 }
 
@@ -338,20 +347,41 @@ function snapshotSignal(raw: unknown, label: string): AnonymousSignal {
   return snapshot;
 }
 
+const INSUFFICIENT_REASON =
+  "no observation has both a confidence above 0 and a source type with credibility above 0";
+
 /**
  * Assess how authentic a corpus of unattributed signals looks: a positive
  * composite of consensus/diversity/volume/recency, minus a penalty when the
- * evidence looks manipulated.
+ * evidence shows a pattern the heuristics discount.
+ *
+ * **Eligible evidence.** Only an observation with a `confidence` above 0 AND a
+ * source type whose configured credibility is above 0 is eligible. Ineligible
+ * observations (zero confidence, an unclassified source type, a source type
+ * configured with credibility 0) are still validated, but they contribute
+ * nothing to the score, the components, the flags, `sourceCount`, or
+ * `confidence`: removing them or adding more of them changes no output except
+ * `signalCount`. An observation's age lowers its weight; it does not make it
+ * ineligible.
+ *
+ * **No eligible evidence.** The result is explicit: `confidence.level` is
+ * `"insufficient"` (with a `reason`), `trustScore` is `0` by convention (not
+ * a measurement), every component is `0`, both flags are `false`, and
+ * `explanation` says there is no usable evidence.
  *
  * Every accumulator (consensus, recency, and the astroturf mean/variance) is
  * summed with an order-independent, correctly-rounded algorithm (`exactSum`),
- * so the result does not depend on the order `signals` is given in.
+ * so the result does not depend on the order `signals` is given in. Each
+ * caller-supplied field is read once, and `config` is validated (see
+ * {@link resolveAnonymousConfig}).
  *
- * @throws TypeError if `options` is missing/not an object, `signals` is not
- *   an array, or `now`/a signal's `publishedAt` is neither a valid ISO 8601
- *   timestamp nor a `Date` (`now` only).
+ * @throws TypeError if `options` is missing/not an object, `signals` is not an
+ *   array or has a hole, an element is not an object, a `source` is not a
+ *   string, `now`/a signal's `publishedAt` is neither a valid ISO 8601
+ *   timestamp nor a `Date` (`now` only), or `config` is not a valid config.
  * @throws RangeError if `now` is an Invalid `Date`, a signal's `sentiment` is
- *   outside `[-1, 1]`, or `confidence` is outside `[0, 1]`.
+ *   outside `[-1, 1]`, `confidence` is outside `[0, 1]`, or a derived value
+ *   overflows.
  */
 export function assessAuthenticity(
   signals: readonly AnonymousSignal[],
@@ -364,25 +394,28 @@ export function assessAuthenticity(
   const resolved = readConfig(config);
   const observations = list.map((raw, index) => snapshotSignal(raw, `signals[${index}]`));
 
+  const eligible = observations.filter((s) => s.confidence > 0 && sourceWeight(resolved, s.source) > 0);
+  if (eligible.length === 0) return insufficientAssessment(observations.length, resolved);
+
   const sources = new Set<string>();
-  for (const s of observations) sources.add(s.source);
+  for (const s of eligible) sources.add(s.source);
   const sourceCount = sources.size;
 
-  // Volume: log-saturating count of independent sources.
+  // Volume: log-saturating count of distinct source types.
   const volume = clamp01(Math.log1p(sourceCount) / Math.log1p(resolved.volumeSaturation));
 
-  // Diversity: distinct sources relative to signal count (capped) — many
-  // signals from one source score low; the same count spread across sources
-  // scores high.
-  const diversity = observations.length === 0 ? 0 : clamp01(sourceCount / Math.min(observations.length, 6));
+  // Diversity: distinct source types relative to observation count (capped) —
+  // many observations from one source type score low; the same count spread
+  // across source types scores high.
+  const diversity = clamp01(sourceCount / Math.min(eligible.length, 6));
 
   // Consensus: recency- and confidence-weighted mean sentiment, weighted by
-  // each source's configured credibility.
+  // each source type's configured credibility.
   const consensusTerms: number[] = [];
   const consensusWeights: number[] = [];
   const recencyTerms: number[] = [];
   const confidences: number[] = [];
-  for (const s of observations) {
+  for (const s of eligible) {
     const age = s.publishedAt ? Math.max(0, daysBetween(s.publishedAt, now)) : resolved.recency.missingDateAgeDays;
     const decay = recencyDecay(age, resolved.recency.halfLifeDays);
     const w = sourceWeight(resolved, s.source) * s.confidence * decay;
@@ -393,13 +426,12 @@ export function assessAuthenticity(
   }
   const consensusNum = exactSum(consensusTerms);
   const consensusDen = exactSum(consensusWeights);
-  const recencyNum = exactSum(recencyTerms);
-  const recencyDen = exactSum(confidences);
   const meanSentiment = consensusDen > 0 ? consensusNum / consensusDen : 0;
   const consensus = clamp01((meanSentiment + 1) / 2);
-  const recency = recencyDen > 0 ? clamp01(recencyNum / recencyDen) : 0;
+  // Every eligible confidence is above 0, so this denominator is positive.
+  const recency = clamp01(exactSum(recencyTerms) / exactSum(confidences));
 
-  const { penalty: astroturfPenalty, flags } = computeAstroturfPenalty(observations, sourceCount, resolved.astroturf);
+  const { penalty: astroturfPenalty, flags } = computeAstroturfPenalty(eligible, sourceCount, resolved.astroturf);
 
   const positive = assertFinite(
     resolved.weights.consensus * consensus +
@@ -419,18 +451,42 @@ export function assessAuthenticity(
     components,
     sourceCount,
     signalCount: observations.length,
+    eligibleSignalCount: eligible.length,
     flags,
     confidence: confidenceFromSampleSize(sourceCount, resolved.confidence),
-    explanation: explain({ trustScore, sourceCount, components, flags }),
+    explanation: explain({
+      trustScore,
+      sourceCount,
+      components,
+      flags,
+      anyDated: eligible.some((s) => s.publishedAt !== null),
+    }),
+  };
+}
+
+/** The documented outcome for a corpus with no eligible observation. */
+function insufficientAssessment(submitted: number, config: AnonymousConfig): AuthenticityAssessment {
+  const confidence = confidenceFromSampleSize(0, config.confidence);
+  confidence.reason = INSUFFICIENT_REASON;
+  return {
+    trustScore: 0,
+    components: { consensus: 0, diversity: 0, volume: 0, recency: 0, astroturfPenalty: 0 },
+    sourceCount: 0,
+    signalCount: submitted,
+    eligibleSignalCount: 0,
+    flags: { lowSourceCount: false, uniformSentiment: false },
+    confidence,
+    explanation: `Insufficient evidence: ${INSUFFICIENT_REASON}, so no score is supported (0 is reported by convention).`,
   };
 }
 
 /**
- * Heuristic manipulation score in `[0, 1]`. Two independent rules, either of
- * which can fire (their penalties add, capped at 1):
- *   - concentration: evidence backed by too few independent sources.
- *   - uniformity: sentiment is near-maximal with near-zero variance — no
- *     organic dissent, the fingerprint of copy-pasted or purchased praise.
+ * Heuristic score in `[0, 1]` for two patterns the heuristics discount. Either
+ * can fire (their penalties add, capped at 1):
+ *   - concentration: the eligible evidence comes from too few source types.
+ *   - uniformity: sentiment is near-maximal with near-zero variance.
+ * Neither is a finding that any observation is fabricated. The caller passes
+ * ELIGIBLE observations only, and there is at least one.
  */
 function computeAstroturfPenalty(
   signals: readonly AnonymousSignal[],
@@ -457,18 +513,31 @@ function explain(x: {
   sourceCount: number;
   components: AuthenticityComponents;
   flags: AstroturfFlags;
+  anyDated: boolean;
 }): string {
   const parts: string[] = [];
   parts.push(
-    `Trust ${x.trustScore}/100 across ${x.sourceCount} independent source${x.sourceCount === 1 ? "" : "s"}.`,
+    `Heuristic score ${x.trustScore}/100 from ${x.sourceCount} distinct source type${x.sourceCount === 1 ? "" : "s"} (independence not verified).`,
   );
   if (x.components.consensus >= 0.7) parts.push("Sentiment is strongly positive.");
   else if (x.components.consensus <= 0.4) parts.push("Sentiment is lukewarm or negative.");
-  if (x.components.diversity < 0.4) parts.push("Evidence leans on very few sources — treat as provisional.");
-  if (x.components.recency < 0.4) parts.push("Most evidence is dated.");
-  if (x.flags.uniformSentiment) parts.push("Sentiment is suspiciously uniform; discounted as likely planted.");
+  if (x.components.diversity < 0.4) {
+    parts.push("Few distinct source types relative to the number of observations; treat as uncertain.");
+  }
+  if (x.components.recency < 0.4) {
+    parts.push(
+      x.anyDated
+        ? "Recency is low given the publication dates supplied; observations without a date use the configured default age."
+        : "No publication dates were supplied, so recency reflects only the configured default age and is uncertain.",
+    );
+  }
+  if (x.flags.uniformSentiment) {
+    parts.push(
+      "Sentiment is unusually uniform, which lowers the score. This is a pattern in the numbers, not a finding about the observations.",
+    );
+  }
   if (x.flags.lowSourceCount && !x.flags.uniformSentiment) {
-    parts.push("Backed by very few independent sources; discounted.");
+    parts.push("Evidence comes from very few distinct source types, which lowers the score.");
   }
   return parts.join(" ");
 }

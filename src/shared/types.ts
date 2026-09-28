@@ -117,6 +117,9 @@ export function shrinkTowardPrior(
   const denominator = assertFinite(totalWeight + dial, "shrinkage denominator (totalWeight + dial)");
   const priorTerm = assertFinite(dial * prior, "shrinkage prior term (dial * prior)");
   const numerator = assertFinite(weightedSum + priorTerm, "shrinkage numerator (weightedSum + dial * prior)");
+  // No weight, no evidence: return the prior itself. The quotient
+  // (dial * prior) / dial is NOT always `prior` to the last bit.
+  if (totalWeight === 0) return prior;
   return denominator > 0 ? assertFinite(numerator / denominator, "shrunk score") : prior;
 }
 
@@ -189,11 +192,16 @@ export function resolveDial(dial: TrustDialPreset | number): number {
 // ---------------------------------------------------------------------------
 
 /**
- * How much credible evidence backs a score. Three bands: enough to stand on
- * its own (`high`), enough to lean on but keep shrinking (`moderate`), or not
- * enough to trust much beyond the baseline (`thin`).
+ * How much credible evidence backs a score. Four levels:
+ *
+ * - `high`: enough to stand on its own.
+ * - `moderate`: enough to lean on but keep shrinking.
+ * - `thin`: some evidence, but not enough to trust much beyond the baseline.
+ * - `insufficient`: NO evidence carried any weight (effective sample size 0).
+ *   There is nothing to be confident about, whatever the thresholds are.
+ *   Check for this level before reading a score.
  */
-export type ConfidenceLevel = "high" | "moderate" | "thin";
+export type ConfidenceLevel = "high" | "moderate" | "thin" | "insufficient";
 
 export interface ConfidenceThresholds {
   /** Effective sample size at/above which confidence is "high". */
@@ -206,10 +214,14 @@ export interface Confidence {
   level: ConfidenceLevel;
   /** The effective (credibility-weighted) sample size the label was derived from. */
   effectiveSampleSize: number;
+  /** Why there is no confidence to report. Present only when `level` is `"insufficient"`. */
+  reason?: string;
 }
 
 /**
  * Derive a confidence label from an effective sample size and its thresholds.
+ * A sample size of exactly 0 is `"insufficient"` (with a `reason`) even when a
+ * threshold is 0; any positive size is `"thin"`, `"moderate"` or `"high"`.
  *
  * @throws TypeError if `effectiveSampleSize` is not a number or `thresholds`
  *   is not an object with exactly `high` and `moderate`.
@@ -222,6 +234,13 @@ export function confidenceFromSampleSize(
 ): Confidence {
   const n = checkNumber(effectiveSampleSize, "effectiveSampleSize", { min: 0, allowInfinity: true });
   const { high, moderate } = checkThresholds(thresholds, "thresholds");
+  if (n === 0) {
+    return {
+      level: "insufficient",
+      effectiveSampleSize: 0,
+      reason: "no evidence carried any weight (effective sample size is 0)",
+    };
+  }
   const level: ConfidenceLevel = n >= high ? "high" : n >= moderate ? "moderate" : "thin";
   return { level, effectiveSampleSize: n };
 }

@@ -213,7 +213,10 @@ describe("README worked example reproduces exactly", () => {
     expect(verdict.components.recency).toBeCloseTo(0.9380486285411919, 9);
     expect(verdict.components.astroturfPenalty).toBe(0);
     expect(verdict.confidence).toEqual({ level: "moderate", effectiveSampleSize: 3 });
-    expect(verdict.explanation).toBe("Trust 83/100 across 3 independent sources. Sentiment is strongly positive.");
+    expect(verdict.explanation).toBe(
+      "Heuristic score 83/100 from 3 distinct source types (independence not verified). Sentiment is strongly positive.",
+    );
+    expect(verdict.eligibleSignalCount).toBe(3);
   });
 });
 

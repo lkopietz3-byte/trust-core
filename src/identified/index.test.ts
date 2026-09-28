@@ -517,8 +517,8 @@ describe("property: scoring invariants over randomized inputs (seeded)", () => {
     const result = scoreEntity([], config, { now: NOW, prior: 42, dial: "balanced" });
     expect(result.raw).toBeNull();
     expect(result.nEff).toBe(0);
-    expect(result.score).toBeCloseTo(42, 10);
-    expect(result.confidence.level).toBe("thin");
+    expect(result.score).toBe(42);
+    expect(result.confidence.level).toBe("insufficient");
   });
 
   it("stays numerically well-behaved with a large number of tiny-weight signals (no NaN/Infinity, no drift)", () => {

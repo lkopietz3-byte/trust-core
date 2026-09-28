@@ -115,8 +115,8 @@ describe("confidenceFromSampleSize", () => {
     expect(confidenceFromSampleSize(2.999, thresholds).level).toBe("thin");
   });
 
-  it("labels 0 as thin", () => {
-    expect(confidenceFromSampleSize(0, thresholds).level).toBe("thin");
+  it("labels 0 as insufficient, not thin: with no evidence there is nothing to be confident about", () => {
+    expect(confidenceFromSampleSize(0, thresholds).level).toBe("insufficient");
   });
 
   it("carries the effective sample size through unchanged", () => {

@@ -334,6 +334,27 @@ export interface SignalContribution {
   ageDays: number | null;
 }
 
+/** UTF-16 code unit order: the same on every machine and locale. */
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Heaviest first; ties by id, tier, source, proof, then age (unknown age
+ * last). The order depends only on the contributions themselves, never on the
+ * order the signals were supplied in.
+ */
+function compareContributions(a: SignalContribution, b: SignalContribution): number {
+  if (a.weight !== b.weight) return a.weight > b.weight ? -1 : 1;
+  const byText =
+    compareText(a.id, b.id) || compareText(a.tier, b.tier) || compareText(a.source, b.source) || compareText(a.proof, b.proof);
+  if (byText !== 0) return byText;
+  if (a.ageDays === b.ageDays) return 0;
+  if (a.ageDays === null) return 1;
+  if (b.ageDays === null) return -1;
+  return a.ageDays < b.ageDays ? -1 : 1;
+}
+
 export interface EntityScore {
   /** Final 0-100 score, shrunk toward `prior` by the dial. */
   score: number;
@@ -342,9 +363,13 @@ export interface EntityScore {
   prior: number;
   /** Effective sample size — sum of signal weights, not a raw count. */
   nEff: number;
+  /** How many signals were submitted (including any that carried zero weight). */
   signalCount: number;
+  /** How many signals carried a positive weight and so contributed to `score`, `raw`, `nEff` and `confidence`. */
+  eligibleSignalCount: number;
+  /** `level` is `"insufficient"` (with a `reason`) when no signal carried any weight. */
   confidence: Confidence;
-  /** Heaviest-weighted signals first. */
+  /** Heaviest-weighted signals first; equal weights are ordered by id, then tier, source, proof and age. Zero-weight signals are listed, with weight 0, so the audit trail shows they were received. */
   contributions: SignalContribution[];
 }
 
@@ -411,12 +436,15 @@ export function scoreEntity(
     });
   }
 
-  contributions.sort((a, b) => b.weight - a.weight);
+  contributions.sort(compareContributions);
 
   const nEff = exactSum(weights);
   const weightedSum = exactSum(weightedValues);
   const raw = nEff > 0 ? clamp(weightedSum / nEff, 0, 100) : null;
   const score = clamp(shrinkTowardPrior(weightedSum, nEff, prior, C), 0, 100);
+
+  const confidence = confidenceFromSampleSize(nEff, resolved.confidence);
+  if (confidence.level === "insufficient") confidence.reason = "no signal has a positive weight, so the score is the prior";
 
   return {
     score,
@@ -424,7 +452,8 @@ export function scoreEntity(
     prior,
     nEff,
     signalCount: snapshots.length,
-    confidence: confidenceFromSampleSize(nEff, resolved.confidence),
+    eligibleSignalCount: weights.filter((weight) => weight > 0).length,
+    confidence,
     contributions,
   };
 }
