@@ -162,11 +162,20 @@ export const TRUST_DIALS: Record<TrustDialPreset, TrustDial> = deepFreeze({
  * prototype-chain name such as `"constructor"` or `"toString"` is rejected
  * with a clear error instead of resolving to an inherited, non-numeric `.C`.
  *
+ * @throws TypeError if `dial` is neither a number nor a string (an array, a
+ *   `String` object, `null`, ... are never coerced into a preset name).
  * @throws RangeError if `dial` is a negative/non-finite number, or a string
  *   that is not one of `"as_is" | "balanced" | "strict"`.
  */
 export function resolveDial(dial: TrustDialPreset | number): number {
   if (typeof dial === "number") return checkNumber(dial, "dial", { min: 0 });
+  // Object.hasOwn coerces its key: ["balanced"], new String("strict") and an
+  // object with a toString would all pass as a preset name without this check.
+  if (typeof dial !== "string") {
+    throw new TypeError(
+      `dial must be a preset name (${Object.keys(TRUST_DIALS).join(", ")}) or a non-negative number (got ${show(dial)})`,
+    );
+  }
   if (!hasOwn(TRUST_DIALS, dial)) {
     throw new RangeError(
       `dial must be one of ${Object.keys(TRUST_DIALS).join(", ")}, or a non-negative number (got ${show(dial)})`,

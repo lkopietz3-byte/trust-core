@@ -35,21 +35,23 @@ import {
   type Weight,
 } from "../shared/types.js";
 import {
-  checkArray,
+  assertFinite,
   checkClock,
   checkNumber,
+  checkPlainRecord,
   checkRecencyCurve,
   checkRecord,
   checkString,
   checkThresholds,
   checkTimestamp,
-  checkWeightMap,
-  assertFinite,
   deepFreeze,
   exactSum,
   hasOwn,
+  mergeSection,
   rejectUnknownKeys,
   show,
+  snapshotArray,
+  snapshotWeightMap,
 } from "../shared/internal.js";
 
 export { TRUST_DIALS, type TrustDial, type TrustDialPreset } from "../shared/types.js";
@@ -130,13 +132,31 @@ const IDENTIFIED_CONFIG_KEYS = [
 ] as const;
 const REPUTATION_CURVE_KEYS = ["floor", "ceil", "neutral"] as const;
 
-function checkReputationCurve(curve: ReputationCurve): ReputationCurve {
-  rejectUnknownKeys(curve, REPUTATION_CURVE_KEYS, "reputation");
+/** Configs this module has already validated and frozen; passing one to `scoreEntity` skips re-validation. */
+const VALIDATED_CONFIGS = new WeakSet<object>([EXAMPLE_IDENTIFIED_CONFIG]);
+
+function checkReputationCurve(curve: unknown): ReputationCurve {
+  const record = checkPlainRecord(curve, "reputation");
+  rejectUnknownKeys(record, REPUTATION_CURVE_KEYS, "reputation");
   return {
-    floor: checkNumber(curve.floor, "reputation.floor", { min: 0 }),
-    ceil: checkNumber(curve.ceil, "reputation.ceil", { min: 0 }),
-    neutral: checkNumber(curve.neutral, "reputation.neutral", { min: 0 }),
+    floor: checkNumber(record.floor, "reputation.floor", { min: 0 }),
+    ceil: checkNumber(record.ceil, "reputation.ceil", { min: 0 }),
+    neutral: checkNumber(record.neutral, "reputation.neutral", { min: 0 }),
   };
+}
+
+/** Validate every section once, copy the validated values, and freeze the result. */
+function buildConfig(parts: Record<(typeof IDENTIFIED_CONFIG_KEYS)[number], unknown>): IdentifiedConfig {
+  const config = deepFreeze<IdentifiedConfig>({
+    tierWeights: snapshotWeightMap(parts.tierWeights, "tierWeights"),
+    sourceWeights: snapshotWeightMap(parts.sourceWeights, "sourceWeights"),
+    proofWeights: snapshotWeightMap(parts.proofWeights, "proofWeights"),
+    reputation: checkReputationCurve(parts.reputation),
+    recency: checkRecencyCurve(parts.recency, "recency"),
+    confidence: checkThresholds(parts.confidence, "confidence"),
+  });
+  VALIDATED_CONFIGS.add(config);
+  return config;
 }
 
 /**
@@ -147,32 +167,48 @@ function checkReputationCurve(curve: ReputationCurve): ReputationCurve {
  * multipliers are finite and non-negative. The returned config is deep-frozen
  * so it cannot be mutated after the fact.
  *
- * @throws TypeError if `overrides` (or a sub-object of it) is not a plain
+ * Only `undefined` means "use the defaults": `resolveIdentifiedConfig()` and
+ * `resolveIdentifiedConfig(undefined)` return {@link EXAMPLE_IDENTIFIED_CONFIG},
+ * and a section left `undefined` keeps its defaults. Any other supplied value
+ * (`null`, `false`, `0`, `""`, `NaN`, an array, a `Date`, a `Map`, a class
+ * instance) is rejected, and each supplied section is checked BEFORE it is
+ * merged. Plain objects and null-prototype objects are accepted as records.
+ * Every property of `overrides` is read once.
+ *
+ * @throws TypeError if `overrides` (or a section of it) is not a plain
  *   object, or has a key outside the known shape.
- * @throws RangeError if a weight, curve, or threshold value is missing,
- *   `NaN`, infinite (where not allowed), negative, or otherwise out of range.
+ * @throws RangeError if a weight, curve, or threshold value is `NaN`,
+ *   infinite (where not allowed), negative, or otherwise out of range.
  */
 export function resolveIdentifiedConfig(overrides?: Partial<IdentifiedConfig>): IdentifiedConfig {
-  if (!overrides) return EXAMPLE_IDENTIFIED_CONFIG;
-  checkRecord(overrides, "overrides");
-  rejectUnknownKeys(overrides, IDENTIFIED_CONFIG_KEYS, "overrides");
+  if (overrides === undefined) return EXAMPLE_IDENTIFIED_CONFIG;
+  const record = checkPlainRecord(overrides, "overrides");
+  rejectUnknownKeys(record, IDENTIFIED_CONFIG_KEYS, "overrides");
+  const { tierWeights, sourceWeights, proofWeights, reputation, recency, confidence } = record;
+  const example = EXAMPLE_IDENTIFIED_CONFIG;
+  return buildConfig({
+    tierWeights: mergeSection(example.tierWeights, tierWeights, "tierWeights"),
+    sourceWeights: mergeSection(example.sourceWeights, sourceWeights, "sourceWeights"),
+    proofWeights: mergeSection(example.proofWeights, proofWeights, "proofWeights"),
+    reputation: mergeSection(example.reputation, reputation, "reputation"),
+    recency: mergeSection(example.recency, recency, "recency"),
+    confidence: mergeSection(example.confidence, confidence, "confidence"),
+  });
+}
 
-  const tierWeights = { ...EXAMPLE_IDENTIFIED_CONFIG.tierWeights, ...overrides.tierWeights };
-  const sourceWeights = { ...EXAMPLE_IDENTIFIED_CONFIG.sourceWeights, ...overrides.sourceWeights };
-  const proofWeights = { ...EXAMPLE_IDENTIFIED_CONFIG.proofWeights, ...overrides.proofWeights };
-  checkWeightMap(tierWeights, "tierWeights");
-  checkWeightMap(sourceWeights, "sourceWeights");
-  checkWeightMap(proofWeights, "proofWeights");
-
-  const reputation = checkReputationCurve({ ...EXAMPLE_IDENTIFIED_CONFIG.reputation, ...overrides.reputation });
-  const recency = { ...EXAMPLE_IDENTIFIED_CONFIG.recency, ...overrides.recency };
-  checkRecencyCurve(recency, "recency");
-  const confidence = checkThresholds(
-    { ...EXAMPLE_IDENTIFIED_CONFIG.confidence, ...overrides.confidence },
-    "confidence",
-  );
-
-  return deepFreeze({ tierWeights, sourceWeights, proofWeights, reputation, recency, confidence });
+/**
+ * The config a scoring function will actually use. A config returned by
+ * {@link resolveIdentifiedConfig} (or the example) is already validated and
+ * frozen and is used as is. Anything else, such as a hand-built object, is
+ * validated in full and copied once, so the numbers checked are the numbers
+ * used even if the caller's object has getters.
+ */
+function readConfig(input: unknown): IdentifiedConfig {
+  if (typeof input === "object" && input !== null && VALIDATED_CONFIGS.has(input)) return input as IdentifiedConfig;
+  const record = checkPlainRecord(input, "config");
+  rejectUnknownKeys(record, IDENTIFIED_CONFIG_KEYS, "config");
+  const { tierWeights, sourceWeights, proofWeights, reputation, recency, confidence } = record;
+  return buildConfig({ tierWeights, sourceWeights, proofWeights, reputation, recency, confidence });
 }
 
 /**
@@ -180,10 +216,12 @@ export function resolveIdentifiedConfig(overrides?: Partial<IdentifiedConfig>): 
  * prototype-chain name (`"constructor"`, `"toString"`, `"__proto__"`, ...)
  * is treated as absent rather than silently resolving to an inherited,
  * non-numeric value that would turn the whole signal weight into `NaN`.
+ * `key` is always a string here (the signal snapshot checked it), so nothing
+ * is coerced into a property key.
  */
 function lookupWeight(map: Record<string, number>, key: string, kind: string): number {
   if (!hasOwn(map, key)) {
-    throw new Error(`trust-core/identified: no weight configured for ${kind} "${key}"`);
+    throw new RangeError(`trust-core/identified: no weight configured for ${kind} ${show(key)}`);
   }
   return map[key]!;
 }
@@ -221,34 +259,66 @@ export function signalAgeDays(occurredAt: string | null, asOf: string, recency: 
 }
 
 /**
+ * Read a signal's fields ONCE, validate that snapshot, and return it. Every
+ * later step uses the snapshot, so a getter or proxy cannot pass validation
+ * with one value and be scored with another.
+ */
+function snapshotSignal(raw: unknown, label: string): IdentifiedSignal {
+  const { id, tier, source, proof, reputation, occurredAt, value } = checkRecord(raw, label);
+  const snapshot: IdentifiedSignal = {
+    id: checkString(id, `${label}.id`),
+    tier: checkString(tier, `${label}.tier`),
+    source: checkString(source, `${label}.source`),
+    proof: checkString(proof, `${label}.proof`),
+    reputation: reputation === null ? null : checkNumber(reputation, `${label}.reputation`, { min: 0, max: 100 }),
+    occurredAt: null,
+    value: 0,
+  };
+  if (occurredAt !== null) {
+    checkTimestamp(occurredAt, `${label}.occurredAt`);
+    snapshot.occurredAt = occurredAt as string;
+  }
+  snapshot.value = checkNumber(value, `${label}.value`, { min: 0, max: 100 });
+  return snapshot;
+}
+
+/** Weight and age of one already-validated signal snapshot. */
+function evaluateSignal(
+  signal: IdentifiedSignal,
+  config: IdentifiedConfig,
+  asOf: string,
+): { weight: Weight; ageDays: number | null } {
+  const tier = lookupWeight(config.tierWeights, signal.tier, "tier");
+  const source = lookupWeight(config.sourceWeights, signal.source, "source");
+  const proof = lookupWeight(config.proofWeights, signal.proof, "proof");
+  const reputation = reputationFactor(signal.reputation, config.reputation);
+  const age = signalAgeDays(signal.occurredAt, asOf, config.recency);
+  const recency = recencyDecay(age, config.recency.halfLifeDays);
+  return {
+    weight: assertFinite(tier * source * proof * reputation * recency, `weight of signal ${show(signal.id)}`),
+    ageDays: signal.occurredAt === null ? null : age,
+  };
+}
+
+/**
  * The intrinsic weight of one signal: tier x source x proof x reputation x
  * recency. Validates the signal's fields first, so a malformed signal (an
  * out-of-range `value`/`reputation`, a non-ISO `occurredAt`, a non-string
  * tier/source/proof) throws a clear `TypeError`/`RangeError` here instead of
- * silently producing a `NaN` weight several calls later.
+ * silently producing a `NaN` weight several calls later. Each field of
+ * `signal` is read once, and `config` is validated ({@link scoreEntity}).
  *
  * @throws TypeError if `asOf`/`occurredAt` is not a valid ISO 8601 timestamp,
- *   or `tier`/`source`/`proof`/`id` is not a string.
- * @throws RangeError if `value` or `reputation` is outside `[0, 100]`, or if
- *   `tier`/`source`/`proof` has no configured weight.
+ *   `tier`/`source`/`proof`/`id` is not a string, or `signal`/`config` is not
+ *   an object of the right shape.
+ * @throws RangeError if `value` or `reputation` is outside `[0, 100]`, if
+ *   `tier`/`source`/`proof` has no configured weight, or if the product of
+ *   the factors overflows or is not finite.
  */
 export function signalWeight(signal: IdentifiedSignal, config: IdentifiedConfig, asOf: string): Weight {
   checkTimestamp(asOf, "asOf");
-  checkString(signal.id, "signal.id");
-  const tierKey = checkString(signal.tier, "signal.tier");
-  const sourceKey = checkString(signal.source, "signal.source");
-  const proofKey = checkString(signal.proof, "signal.proof");
-  if (signal.reputation !== null) checkNumber(signal.reputation, "signal.reputation", { min: 0, max: 100 });
-  if (signal.occurredAt !== null) checkTimestamp(signal.occurredAt, "signal.occurredAt");
-  checkNumber(signal.value, "signal.value", { min: 0, max: 100 });
-
-  const tier = lookupWeight(config.tierWeights, tierKey, "tier");
-  const source = lookupWeight(config.sourceWeights, sourceKey, "source");
-  const proof = lookupWeight(config.proofWeights, proofKey, "proof");
-  const reputation = reputationFactor(signal.reputation, config.reputation);
-  const age = signalAgeDays(signal.occurredAt, asOf, config.recency);
-  const recency = recencyDecay(age, config.recency.halfLifeDays);
-  return assertFinite(tier * source * proof * reputation * recency, `weight of signal ${show(signal.id)}`);
+  const snapshot = snapshotSignal(signal, "signal");
+  return evaluateSignal(snapshot, readConfig(config), asOf).weight;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,19 +385,20 @@ export function scoreEntity(
   config: IdentifiedConfig,
   options: ScoreEntityOptions,
 ): EntityScore {
-  checkArray(signals, "signals");
-  checkRecord(options, "options");
-  const { prior } = options;
-  const now = checkClock(options.now, "now");
-  checkNumber(prior, "prior", { min: 0, max: 100 });
-  const C = resolveDial(options.dial ?? "balanced");
+  const list = snapshotArray(signals, "signals");
+  const { now: rawNow, prior: rawPrior, dial: rawDial } = checkRecord(options, "options");
+  const now = checkClock(rawNow, "now");
+  const prior = checkNumber(rawPrior, "prior", { min: 0, max: 100 });
+  const C = resolveDial((rawDial === undefined ? "balanced" : rawDial) as TrustDialPreset | number);
+  const resolved = readConfig(config);
+  const snapshots = list.map((raw, index) => snapshotSignal(raw, `signals[${index}]`));
 
   const weights: number[] = [];
   const weightedValues: number[] = [];
   const contributions: SignalContribution[] = [];
 
-  for (const signal of signals) {
-    const weight = signalWeight(signal, config, now);
+  for (const signal of snapshots) {
+    const { weight, ageDays } = evaluateSignal(signal, resolved, now);
     weights.push(weight);
     weightedValues.push(assertFinite(weight * signal.value, `weighted value of signal ${show(signal.id)}`));
     contributions.push({
@@ -336,7 +407,7 @@ export function scoreEntity(
       source: signal.source,
       proof: signal.proof,
       weight,
-      ageDays: signal.occurredAt ? Math.max(0, daysBetween(signal.occurredAt, now)) : null,
+      ageDays,
     });
   }
 
@@ -352,8 +423,8 @@ export function scoreEntity(
     raw,
     prior,
     nEff,
-    signalCount: signals.length,
-    confidence: confidenceFromSampleSize(nEff, config.confidence),
+    signalCount: snapshots.length,
+    confidence: confidenceFromSampleSize(nEff, resolved.confidence),
     contributions,
   };
 }
@@ -373,15 +444,15 @@ export function composeDimensions(
   scores: Record<string, EntityScore>,
   weights: Record<string, number>,
 ): number {
-  checkRecord(scores, "scores");
-  checkRecord(weights, "weights");
+  checkPlainRecord(scores, "scores");
+  checkPlainRecord(weights, "weights");
   const numerators: number[] = [];
   const denominators: number[] = [];
   for (const [key, entry] of Object.entries(scores)) {
     const w = hasOwn(weights, key) ? weights[key]! : 0;
-    checkNumber(w, `weights[${JSON.stringify(key)}]`, {});
-    const dimension = checkRecord(entry, `scores[${JSON.stringify(key)}]`);
-    const dimensionScore = checkNumber(dimension.score, `scores[${JSON.stringify(key)}].score`, { min: 0, max: 100 });
+    checkNumber(w, `weights[${show(key)}]`, {});
+    const dimension = checkRecord(entry, `scores[${show(key)}]`);
+    const dimensionScore = checkNumber(dimension.score, `scores[${show(key)}].score`, { min: 0, max: 100 });
     if (w <= 0) continue;
     numerators.push(assertFinite(w * dimensionScore, `weighted score of dimension ${show(key)}`));
     denominators.push(w);

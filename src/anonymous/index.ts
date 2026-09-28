@@ -34,20 +34,22 @@ import {
   type ConfidenceThresholds,
 } from "../shared/types.js";
 import {
-  checkArray,
+  assertFinite,
   checkClock,
   checkNumber,
+  checkPlainRecord,
   checkRecencyCurve,
   checkRecord,
   checkString,
   checkThresholds,
   checkTimestamp,
-  checkWeightMap,
-  assertFinite,
   deepFreeze,
   exactSum,
   hasOwn,
+  mergeSection,
   rejectUnknownKeys,
+  snapshotArray,
+  snapshotWeightMap,
 } from "../shared/internal.js";
 
 // ---------------------------------------------------------------------------
@@ -155,35 +157,55 @@ const ASTROTURF_RULES_KEYS = [
   "minSignalsForUniformCheck",
 ] as const;
 
-function checkAuthenticityWeights(weights: AuthenticityWeights): AuthenticityWeights {
-  rejectUnknownKeys(weights, AUTHENTICITY_WEIGHTS_KEYS, "weights");
+/** Configs this module has already validated and frozen; passing one to `assessAuthenticity` skips re-validation. */
+const VALIDATED_CONFIGS = new WeakSet<object>([EXAMPLE_ANONYMOUS_CONFIG]);
+
+function checkAuthenticityWeights(weights: unknown): AuthenticityWeights {
+  const record = checkPlainRecord(weights, "weights");
+  rejectUnknownKeys(record, AUTHENTICITY_WEIGHTS_KEYS, "weights");
   return {
-    consensus: checkNumber(weights.consensus, "weights.consensus", { min: 0 }),
-    diversity: checkNumber(weights.diversity, "weights.diversity", { min: 0 }),
-    volume: checkNumber(weights.volume, "weights.volume", { min: 0 }),
-    recency: checkNumber(weights.recency, "weights.recency", { min: 0 }),
+    consensus: checkNumber(record.consensus, "weights.consensus", { min: 0 }),
+    diversity: checkNumber(record.diversity, "weights.diversity", { min: 0 }),
+    volume: checkNumber(record.volume, "weights.volume", { min: 0 }),
+    recency: checkNumber(record.recency, "weights.recency", { min: 0 }),
   };
 }
 
-function checkAstroturfRules(rules: AstroturfRules): AstroturfRules {
-  rejectUnknownKeys(rules, ASTROTURF_RULES_KEYS, "astroturf");
+function checkAstroturfRules(rules: unknown): AstroturfRules {
+  const record = checkPlainRecord(rules, "astroturf");
+  rejectUnknownKeys(record, ASTROTURF_RULES_KEYS, "astroturf");
   return {
-    concentrationSourceCeiling: checkNumber(rules.concentrationSourceCeiling, "astroturf.concentrationSourceCeiling", {
+    concentrationSourceCeiling: checkNumber(record.concentrationSourceCeiling, "astroturf.concentrationSourceCeiling", {
       min: 0,
     }),
-    concentrationPenalty: checkNumber(rules.concentrationPenalty, "astroturf.concentrationPenalty", { min: 0 }),
-    uniformMeanThreshold: checkNumber(rules.uniformMeanThreshold, "astroturf.uniformMeanThreshold", {
+    concentrationPenalty: checkNumber(record.concentrationPenalty, "astroturf.concentrationPenalty", { min: 0 }),
+    uniformMeanThreshold: checkNumber(record.uniformMeanThreshold, "astroturf.uniformMeanThreshold", {
       min: -1,
       max: 1,
     }),
-    uniformVarianceThreshold: checkNumber(rules.uniformVarianceThreshold, "astroturf.uniformVarianceThreshold", {
+    uniformVarianceThreshold: checkNumber(record.uniformVarianceThreshold, "astroturf.uniformVarianceThreshold", {
       min: 0,
     }),
-    uniformPenalty: checkNumber(rules.uniformPenalty, "astroturf.uniformPenalty", { min: 0 }),
-    minSignalsForUniformCheck: checkNumber(rules.minSignalsForUniformCheck, "astroturf.minSignalsForUniformCheck", {
+    uniformPenalty: checkNumber(record.uniformPenalty, "astroturf.uniformPenalty", { min: 0 }),
+    minSignalsForUniformCheck: checkNumber(record.minSignalsForUniformCheck, "astroturf.minSignalsForUniformCheck", {
       min: 0,
     }),
   };
+}
+
+/** Validate every section once, copy the validated values, and freeze the result. */
+function buildConfig(parts: Record<(typeof ANONYMOUS_CONFIG_KEYS)[number], unknown>): AnonymousConfig {
+  const config = deepFreeze<AnonymousConfig>({
+    sourceWeights: snapshotWeightMap(parts.sourceWeights, "sourceWeights"),
+    weights: checkAuthenticityWeights(parts.weights),
+    astroturfWeight: checkNumber(parts.astroturfWeight, "astroturfWeight", { min: 0 }),
+    recency: checkRecencyCurve(parts.recency, "recency"),
+    volumeSaturation: checkNumber(parts.volumeSaturation, "volumeSaturation", { min: 0, minExclusive: true }),
+    astroturf: checkAstroturfRules(parts.astroturf),
+    confidence: checkThresholds(parts.confidence, "confidence"),
+  });
+  VALIDATED_CONFIGS.add(config);
+  return config;
 }
 
 /**
@@ -193,35 +215,50 @@ function checkAstroturfRules(rules: AstroturfRules): AstroturfRules {
  * their documented ranges, and `recency`/`confidence` have no unknown keys.
  * The returned config is deep-frozen so it cannot be mutated after the fact.
  *
- * @throws TypeError if `overrides` (or a sub-object of it) is not a plain
- *   object, or has a key outside the known shape.
- * @throws RangeError if a weight, curve, or threshold value is missing,
- *   `NaN`, infinite (where not allowed), negative, or otherwise out of range.
+ * Only `undefined` means "use the defaults": `resolveAnonymousConfig()` and
+ * `resolveAnonymousConfig(undefined)` return {@link EXAMPLE_ANONYMOUS_CONFIG},
+ * and a section or number left `undefined` keeps its default. Any other
+ * supplied value (`null`, `false`, `0`, `""`, `NaN`, an array, a `Date`, a
+ * `Map`, a class instance, or a string where a number belongs) is rejected,
+ * and each supplied section is checked BEFORE it is merged. Plain objects and
+ * null-prototype objects are accepted as records. Every property of
+ * `overrides` is read once.
+ *
+ * @throws TypeError if `overrides` (or a section of it) is not a plain
+ *   object, a number is not a number, or a key is outside the known shape.
+ * @throws RangeError if a weight, curve, or threshold value is `NaN`,
+ *   infinite (where not allowed), negative, or otherwise out of range.
  */
 export function resolveAnonymousConfig(overrides?: Partial<AnonymousConfig>): AnonymousConfig {
-  if (!overrides) return EXAMPLE_ANONYMOUS_CONFIG;
-  checkRecord(overrides, "overrides");
-  rejectUnknownKeys(overrides, ANONYMOUS_CONFIG_KEYS, "overrides");
+  if (overrides === undefined) return EXAMPLE_ANONYMOUS_CONFIG;
+  const record = checkPlainRecord(overrides, "overrides");
+  rejectUnknownKeys(record, ANONYMOUS_CONFIG_KEYS, "overrides");
+  const { sourceWeights, weights, astroturfWeight, recency, volumeSaturation, astroturf, confidence } = record;
+  const example = EXAMPLE_ANONYMOUS_CONFIG;
+  return buildConfig({
+    sourceWeights: mergeSection(example.sourceWeights, sourceWeights, "sourceWeights"),
+    weights: mergeSection(example.weights, weights, "weights"),
+    astroturfWeight: astroturfWeight === undefined ? example.astroturfWeight : astroturfWeight,
+    recency: mergeSection(example.recency, recency, "recency"),
+    volumeSaturation: volumeSaturation === undefined ? example.volumeSaturation : volumeSaturation,
+    astroturf: mergeSection(example.astroturf, astroturf, "astroturf"),
+    confidence: mergeSection(example.confidence, confidence, "confidence"),
+  });
+}
 
-  const sourceWeights = { ...EXAMPLE_ANONYMOUS_CONFIG.sourceWeights, ...overrides.sourceWeights };
-  checkWeightMap(sourceWeights, "sourceWeights");
-  const weights = checkAuthenticityWeights({ ...EXAMPLE_ANONYMOUS_CONFIG.weights, ...overrides.weights });
-  const astroturfWeight = checkNumber(
-    overrides.astroturfWeight ?? EXAMPLE_ANONYMOUS_CONFIG.astroturfWeight,
-    "astroturfWeight",
-    { min: 0 },
-  );
-  const recency = { ...EXAMPLE_ANONYMOUS_CONFIG.recency, ...overrides.recency };
-  checkRecencyCurve(recency, "recency");
-  const volumeSaturation = checkNumber(
-    overrides.volumeSaturation ?? EXAMPLE_ANONYMOUS_CONFIG.volumeSaturation,
-    "volumeSaturation",
-    { min: 0, minExclusive: true },
-  );
-  const astroturf = checkAstroturfRules({ ...EXAMPLE_ANONYMOUS_CONFIG.astroturf, ...overrides.astroturf });
-  const confidence = checkThresholds({ ...EXAMPLE_ANONYMOUS_CONFIG.confidence, ...overrides.confidence }, "confidence");
-
-  return deepFreeze({ sourceWeights, weights, astroturfWeight, recency, volumeSaturation, astroturf, confidence });
+/**
+ * The config a scoring function will actually use. A config returned by
+ * {@link resolveAnonymousConfig} (or the example) is already validated and
+ * frozen and is used as is. Anything else, such as a hand-built object, is
+ * validated in full and copied once, so the numbers checked are the numbers
+ * used even if the caller's object has getters.
+ */
+function readConfig(input: unknown): AnonymousConfig {
+  if (typeof input === "object" && input !== null && VALIDATED_CONFIGS.has(input)) return input as AnonymousConfig;
+  const record = checkPlainRecord(input, "config");
+  rejectUnknownKeys(record, ANONYMOUS_CONFIG_KEYS, "config");
+  const { sourceWeights, weights, astroturfWeight, recency, volumeSaturation, astroturf, confidence } = record;
+  return buildConfig({ sourceWeights, weights, astroturfWeight, recency, volumeSaturation, astroturf, confidence });
 }
 
 /**
@@ -232,7 +269,8 @@ export function resolveAnonymousConfig(overrides?: Partial<AnonymousConfig>): An
  * recency accumulators with `NaN`. A legitimately unclassified source type
  * also defaults to 0 — anonymous corpora routinely include source types
  * nobody has classified yet, and a new, unweighted source shouldn't crash
- * the assessment.
+ * the assessment. `source` is always a string here (the signal snapshot
+ * checked it), so nothing is coerced into a property key.
  */
 function sourceWeight(config: AnonymousConfig, source: string): number {
   return hasOwn(config.sourceWeights, source) ? config.sourceWeights[source]! : 0;
@@ -279,6 +317,28 @@ export interface AssessAuthenticityOptions {
 }
 
 /**
+ * Read a signal's fields ONCE, validate that snapshot, and return it. Every
+ * later step uses the snapshot, so a getter or proxy cannot pass validation
+ * with one value and be scored with another. `id` is not read: nothing in the
+ * assessment depends on it.
+ */
+function snapshotSignal(raw: unknown, label: string): AnonymousSignal {
+  const { source, sentiment, confidence, publishedAt } = checkRecord(raw, label);
+  const snapshot: AnonymousSignal = {
+    id: "",
+    source: checkString(source, `${label}.source`),
+    sentiment: checkNumber(sentiment, `${label}.sentiment`, { min: -1, max: 1 }),
+    confidence: checkNumber(confidence, `${label}.confidence`, { min: 0, max: 1 }),
+    publishedAt: null,
+  };
+  if (publishedAt !== null && publishedAt !== undefined) {
+    checkTimestamp(publishedAt, `${label}.publishedAt`);
+    snapshot.publishedAt = publishedAt as string;
+  }
+  return snapshot;
+}
+
+/**
  * Assess how authentic a corpus of unattributed signals looks: a positive
  * composite of consensus/diversity/volume/recency, minus a penalty when the
  * evidence looks manipulated.
@@ -298,27 +358,23 @@ export function assessAuthenticity(
   config: AnonymousConfig,
   options: AssessAuthenticityOptions,
 ): AuthenticityAssessment {
-  checkArray(signals, "signals");
-  checkRecord(options, "options");
-  const now = checkClock(options.now, "now");
-  for (const s of signals) {
-    checkString(s.source, "signal.source");
-    checkNumber(s.sentiment, "signal.sentiment", { min: -1, max: 1 });
-    checkNumber(s.confidence, "signal.confidence", { min: 0, max: 1 });
-    if (s.publishedAt != null) checkTimestamp(s.publishedAt, "signal.publishedAt");
-  }
+  const list = snapshotArray(signals, "signals");
+  const { now: rawNow } = checkRecord(options, "options");
+  const now = checkClock(rawNow, "now");
+  const resolved = readConfig(config);
+  const observations = list.map((raw, index) => snapshotSignal(raw, `signals[${index}]`));
 
   const sources = new Set<string>();
-  for (const s of signals) sources.add(s.source);
+  for (const s of observations) sources.add(s.source);
   const sourceCount = sources.size;
 
   // Volume: log-saturating count of independent sources.
-  const volume = clamp01(Math.log1p(sourceCount) / Math.log1p(config.volumeSaturation));
+  const volume = clamp01(Math.log1p(sourceCount) / Math.log1p(resolved.volumeSaturation));
 
   // Diversity: distinct sources relative to signal count (capped) — many
   // signals from one source score low; the same count spread across sources
   // scores high.
-  const diversity = signals.length === 0 ? 0 : clamp01(sourceCount / Math.min(signals.length, 6));
+  const diversity = observations.length === 0 ? 0 : clamp01(sourceCount / Math.min(observations.length, 6));
 
   // Consensus: recency- and confidence-weighted mean sentiment, weighted by
   // each source's configured credibility.
@@ -326,10 +382,10 @@ export function assessAuthenticity(
   const consensusWeights: number[] = [];
   const recencyTerms: number[] = [];
   const confidences: number[] = [];
-  for (const s of signals) {
-    const age = s.publishedAt ? Math.max(0, daysBetween(s.publishedAt, now)) : config.recency.missingDateAgeDays;
-    const decay = recencyDecay(age, config.recency.halfLifeDays);
-    const w = sourceWeight(config, s.source) * s.confidence * decay;
+  for (const s of observations) {
+    const age = s.publishedAt ? Math.max(0, daysBetween(s.publishedAt, now)) : resolved.recency.missingDateAgeDays;
+    const decay = recencyDecay(age, resolved.recency.halfLifeDays);
+    const w = sourceWeight(resolved, s.source) * s.confidence * decay;
     consensusTerms.push(s.sentiment * w);
     consensusWeights.push(w);
     recencyTerms.push(decay * s.confidence);
@@ -343,16 +399,16 @@ export function assessAuthenticity(
   const consensus = clamp01((meanSentiment + 1) / 2);
   const recency = recencyDen > 0 ? clamp01(recencyNum / recencyDen) : 0;
 
-  const { penalty: astroturfPenalty, flags } = computeAstroturfPenalty(signals, sourceCount, config.astroturf);
+  const { penalty: astroturfPenalty, flags } = computeAstroturfPenalty(observations, sourceCount, resolved.astroturf);
 
   const positive = assertFinite(
-    config.weights.consensus * consensus +
-      config.weights.diversity * diversity +
-      config.weights.volume * volume +
-      config.weights.recency * recency,
+    resolved.weights.consensus * consensus +
+      resolved.weights.diversity * diversity +
+      resolved.weights.volume * volume +
+      resolved.weights.recency * recency,
     "positive composite",
   );
-  const penaltyTerm = assertFinite(config.astroturfWeight * astroturfPenalty, "astroturf penalty term");
+  const penaltyTerm = assertFinite(resolved.astroturfWeight * astroturfPenalty, "astroturf penalty term");
 
   const trustScore = Math.round(100 * clamp01(positive - penaltyTerm));
 
@@ -362,9 +418,9 @@ export function assessAuthenticity(
     trustScore,
     components,
     sourceCount,
-    signalCount: signals.length,
+    signalCount: observations.length,
     flags,
-    confidence: confidenceFromSampleSize(sourceCount, config.confidence),
+    confidence: confidenceFromSampleSize(sourceCount, resolved.confidence),
     explanation: explain({ trustScore, sourceCount, components, flags }),
   };
 }
