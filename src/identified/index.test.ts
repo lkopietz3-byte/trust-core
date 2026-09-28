@@ -599,3 +599,21 @@ describe("derived values must stay finite or throw RangeError (TC-001)", () => {
     expect(() => composeDimensions({ a: null as never }, { a: 1 })).toThrow(TypeError);
   });
 });
+
+describe("composeDimensions excludes missing and non-positive weights", () => {
+  const strong = scoreEntity([signal({ value: 90 })], config, { now: NOW, prior: 50, dial: 0 });
+  const weak = scoreEntity([signal({ value: 10 })], config, { now: NOW, prior: 50, dial: 0 });
+
+  it("a negative weight is excluded, not subtracted", () => {
+    expect(composeDimensions({ strong, weak }, { strong: 1, weak: -3 })).toBe(strong.score);
+  });
+
+  it("a zero weight and a dimension with no weight are excluded", () => {
+    expect(composeDimensions({ strong, weak }, { strong: 2, weak: 0 })).toBe(strong.score);
+    expect(composeDimensions({ strong, weak }, { strong: 2 })).toBe(strong.score);
+  });
+
+  it("positive weights average by weight", () => {
+    expect(composeDimensions({ strong, weak }, { strong: 3, weak: 1 })).toBeCloseTo((3 * strong.score + weak.score) / 4, 10);
+  });
+});

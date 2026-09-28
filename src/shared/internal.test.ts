@@ -291,3 +291,82 @@ describe("config record helpers", () => {
     expect(deepFreeze(null)).toBe(null);
   });
 });
+
+describe("exactSum is the correctly rounded exact sum (oracle: BigInt arithmetic)", () => {
+  /** Deterministic PRNG (mulberry32) so the property test is reproducible. */
+  function mulberry32(seed: number): () => number {
+    let s = seed | 0;
+    return () => {
+      s = (s + 0x6d2b79f5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rand = mulberry32(20260928);
+  const SCALE = 200; // every generated value is an integer multiple of 2^-200
+
+  /** k * 2^e with k a random integer of 1 to 53 bits, so it is exactly representable and often adds exactly. */
+  function randomDouble(): { value: number; scaled: bigint } {
+    const bits = 1 + Math.floor(rand() * 53);
+    const k = BigInt(Math.floor(rand() * 2 ** bits)) * (rand() < 0.5 ? -1n : 1n);
+    const e = -Math.floor(rand() * 110);
+    return { value: Number(k) * 2 ** e, scaled: k * 2n ** BigInt(SCALE + e) };
+  }
+
+  it("matches exact rational arithmetic rounded once, including round-half-even ties", () => {
+    for (let trial = 0; trial < 20000; trial++) {
+      const terms = Array.from({ length: 1 + Math.floor(rand() * 10) }, randomDouble);
+      const exact = terms.reduce((sum, term) => sum + term.scaled, 0n);
+      // Number(bigint) rounds to nearest, ties to even; the scaling by a power of two is exact.
+      const expected = Number(exact) * 2 ** -SCALE;
+      expect(exactSum(terms.map((term) => term.value))).toBe(expected === 0 ? 0 : expected);
+    }
+  });
+
+  it("gets constructed near-ties right", () => {
+    const ulp = 2 ** -52;
+    expect(exactSum([1, ulp / 2])).toBe(1); // exact tie: round half to even
+    expect(exactSum([1 + ulp, ulp / 2])).toBe(1 + 2 * ulp); // exact tie: round half to even (up)
+    expect(exactSum([1, ulp / 2, 2 ** -105])).toBe(1 + ulp); // just above a tie: round up
+    expect(exactSum([-1, -ulp / 2, -(2 ** -105)])).toBe(-(1 + ulp));
+    expect(exactSum([1, ulp / 2, -(2 ** -105)])).toBe(1); // just below a tie: round down
+    expect(exactSum([2 ** -105, 1, ulp / 2])).toBe(1 + ulp); // order does not matter
+  });
+
+  it("rounds by a lower partial that sits just below or above a tie, for both signs", () => {
+    expect(exactSum([2 ** 51, 0.5, 0.25])).toBe(2 ** 51 + 1); // tie, half to even
+    expect(exactSum([2 ** 51, 0.5, 0.125])).toBe(2 ** 51 + 0.5); // below the tie
+    expect(exactSum([-(2 ** 51), -0.5, -0.25])).toBe(-(2 ** 51) - 1);
+    expect(exactSum([-(2 ** 51), -0.5, -0.125])).toBe(-(2 ** 51) - 0.5);
+    expect(exactSum([-1, -(2 ** -53), 2 ** -105])).toBe(-1); // just inside the tie, opposite sign
+    expect(exactSum([-1, -(2 ** -53), -(2 ** -105)])).toBe(-1 - 2 ** -52); // just past the tie
+    expect(exactSum([1, 2 ** -53, -(2 ** -105)])).toBe(1);
+  });
+
+  it("returns +0 rather than -0", () => {
+    expect(Object.is(exactSum([-0]), 0)).toBe(true);
+    expect(Object.is(exactSum([0.5, -0.5]), 0)).toBe(true);
+    expect(Object.is(exactSum([]), 0)).toBe(true);
+  });
+});
+
+describe("show() escapes a symbol's description and keeps the symbol readable", () => {
+  it("escapes control and bidi characters in Symbol descriptions", () => {
+    expect(show(Symbol("a\nb"))).toBe("Symbol(a\\u000ab)");
+    expect(show(Symbol("x‮y"))).toBe("Symbol(x\\u202ey)");
+  });
+});
+
+describe("threshold and freeze edge cases", () => {
+  it("checkThresholds accepts an infinite moderate threshold when high is infinite too", () => {
+    expect(checkThresholds({ high: Infinity, moderate: Infinity }, "t")).toEqual({ high: Infinity, moderate: Infinity });
+  });
+
+  it("deepFreeze leaves an already-frozen value alone and does not descend into it", () => {
+    const inner = { deep: { x: 1 } };
+    const shallow = Object.freeze({ inner });
+    deepFreeze(shallow);
+    expect(Object.isFrozen(inner)).toBe(false);
+  });
+});

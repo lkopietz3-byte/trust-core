@@ -204,6 +204,28 @@ describe("equal-weight contributions have a stable order (TC-006)", () => {
     }
   });
 
+  it("orders otherwise identical contributions by age, youngest first and unknown age last, from every input order", () => {
+    const ages: (string | null)[] = [NOW, "2026-07-27", "2026-07-01", null];
+    const permutations = (items: (string | null)[]): (string | null)[][] =>
+      items.length <= 1
+        ? [items]
+        : items.flatMap((item, i) => permutations([...items.slice(0, i), ...items.slice(i + 1)]).map((rest) => [item, ...rest]));
+    for (const permutation of permutations(ages)) {
+      const rows = scoreEntity(
+        permutation.map((occurredAt) => mk("same", { occurredAt })),
+        UNIT,
+        { now: NOW, prior: 50 },
+      ).contributions.map((c) => c.ageDays);
+      expect(rows).toEqual([0, 5, 31, null]);
+    }
+  });
+
+  it("keeps two fully identical contributions, in either order", () => {
+    const result = scoreEntity([mk("same"), mk("same")], UNIT, { now: NOW, prior: 50 });
+    expect(result.contributions).toHaveLength(2);
+    expect(result.contributions[0]).toEqual(result.contributions[1]);
+  });
+
   it("orders the tie-break keys id, tier, source, proof, then age with unknown age last", () => {
     const multi = resolveIdentifiedConfig({
       ...UNIT,

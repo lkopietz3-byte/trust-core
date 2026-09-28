@@ -250,9 +250,10 @@ export function checkThresholds(thresholds: unknown, label: string): { high: num
 
 /** Freeze `value` and everything reachable from it. Returns `value`. */
 export function deepFreeze<T>(value: T): T {
-  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+  // Primitives and null already count as frozen, so only a live object recurses.
+  if (!Object.isFrozen(value)) {
     Object.freeze(value);
-    for (const inner of Object.values(value)) deepFreeze(inner);
+    for (const inner of Object.values(value as object)) deepFreeze(inner);
   }
   return value;
 }
@@ -291,7 +292,7 @@ export function checkClock(value: unknown, label: string): string {
 // ---------------------------------------------------------------------------
 
 const ISO_TIMESTAMP =
-  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|[+-]\d{2}:\d{2}))?$/;
+  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(?:Z|([+-])(\d{2}):(\d{2})))?$/;
 
 const MS_PER_MINUTE = 60_000;
 
@@ -334,18 +335,20 @@ export function checkTimestamp(value: unknown, label: string): number {
   if (hour > 23 || minute > 59 || second > 59) return fail();
 
   let offsetMinutes = 0;
-  const zone = m[8];
-  if (zone !== undefined && zone !== "Z") {
-    const offsetHour = Number(zone.slice(1, 3));
-    const offsetMinute = Number(zone.slice(4, 6));
+  // Groups 8-10 are the sign, hour and minute of a `+HH:MM` offset; all are
+  // undefined for a date-only value or `Z`, which mean UTC.
+  if (m[8] !== undefined) {
+    const offsetHour = Number(m[9]);
+    const offsetMinute = Number(m[10]);
     if (offsetHour > 23 || offsetMinute > 59) return fail();
-    offsetMinutes = (zone.startsWith("-") ? -1 : 1) * (offsetHour * 60 + offsetMinute);
+    offsetMinutes = (m[8] === "-" ? -1 : 1) * (offsetHour * 60 + offsetMinute);
   }
 
   // setUTCFullYear (unlike Date.UTC) does not remap years 0-99 to 1900-1999.
   const date = new Date(0);
   date.setUTCFullYear(year, month - 1, day);
-  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return fail();
+  // A day past the end of the month (or 0) rolls into another month, so the month alone detects it.
+  if (date.getUTCMonth() !== month - 1) return fail();
   date.setUTCHours(hour, minute, second, millis);
   return date.getTime() - offsetMinutes * MS_PER_MINUTE;
 }

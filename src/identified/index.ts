@@ -34,6 +34,7 @@ import {
   type TrustDialPreset,
   type Weight,
 } from "../shared/types.js";
+import { compareContributions } from "./order.js";
 import {
   assertFinite,
   checkClock,
@@ -325,29 +326,6 @@ export interface SignalContribution {
   proof: string;
   weight: Weight;
   ageDays: number | null;
-}
-
-/** UTF-16 code unit order: the same on every machine and locale. */
-function compareText(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/**
- * Heaviest first; ties by id, tier, source, proof, then age (unknown age
- * last). The order depends only on the contributions themselves, never on the
- * order the signals were supplied in.
- */
-function compareContributions(a: SignalContribution, b: SignalContribution): number {
-  if (a.weight !== b.weight) return b.weight - a.weight;
-  const ageA = a.ageDays ?? Infinity;
-  const ageB = b.ageDays ?? Infinity;
-  return (
-    compareText(a.id, b.id) ||
-    compareText(a.tier, b.tier) ||
-    compareText(a.source, b.source) ||
-    compareText(a.proof, b.proof) ||
-    (ageA < ageB ? -1 : ageA > ageB ? 1 : 0)
-  );
 }
 
 export interface EntityScore {
