@@ -104,9 +104,11 @@ export function recencyDecay(ageDays: number, halfLifeDays: number): number {
  * evidence. As `totalWeight` grows past `dial`, the result converges on the
  * unshrunk weighted mean.
  *
- * @throws RangeError if any input is `NaN` or infinite, or if the denominator,
- *   the `dial * prior` term, the numerator or the quotient overflows. It never
- *   returns `NaN`, `Infinity`, or a value that overflow has silently distorted.
+ * @throws TypeError if an argument is not a number.
+ * @throws RangeError if an argument is `NaN` or infinite, `totalWeight` or
+ *   `dial` is negative, or the denominator, the `dial * prior` term, the
+ *   numerator or the quotient overflows. It never returns `NaN`, `Infinity`,
+ *   or a value that overflow has silently distorted.
  */
 export function shrinkTowardPrior(
   weightedSum: number,
@@ -114,13 +116,17 @@ export function shrinkTowardPrior(
   prior: number,
   dial: number,
 ): number {
+  checkNumber(weightedSum, "weightedSum");
+  checkNumber(totalWeight, "totalWeight", { min: 0 });
+  checkNumber(prior, "prior");
+  checkNumber(dial, "dial", { min: 0 });
   const denominator = assertFinite(totalWeight + dial, "shrinkage denominator (totalWeight + dial)");
   const priorTerm = assertFinite(dial * prior, "shrinkage prior term (dial * prior)");
   const numerator = assertFinite(weightedSum + priorTerm, "shrinkage numerator (weightedSum + dial * prior)");
   // No weight, no evidence: return the prior itself. The quotient
   // (dial * prior) / dial is NOT always `prior` to the last bit.
   if (totalWeight === 0) return prior;
-  return denominator > 0 ? assertFinite(numerator / denominator, "shrunk score") : prior;
+  return assertFinite(numerator / denominator, "shrunk score");
 }
 
 /**

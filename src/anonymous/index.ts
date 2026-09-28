@@ -157,9 +157,6 @@ const ASTROTURF_RULES_KEYS = [
   "minSignalsForUniformCheck",
 ] as const;
 
-/** Configs this module has already validated and frozen; passing one to `assessAuthenticity` skips re-validation. */
-const VALIDATED_CONFIGS = new WeakSet<object>([EXAMPLE_ANONYMOUS_CONFIG]);
-
 function checkAuthenticityWeights(weights: unknown): AuthenticityWeights {
   const record = checkPlainRecord(weights, "weights");
   rejectUnknownKeys(record, AUTHENTICITY_WEIGHTS_KEYS, "weights");
@@ -195,7 +192,7 @@ function checkAstroturfRules(rules: unknown): AstroturfRules {
 
 /** Validate every section once, copy the validated values, and freeze the result. */
 function buildConfig(parts: Record<(typeof ANONYMOUS_CONFIG_KEYS)[number], unknown>): AnonymousConfig {
-  const config = deepFreeze<AnonymousConfig>({
+  return deepFreeze<AnonymousConfig>({
     sourceWeights: snapshotWeightMap(parts.sourceWeights, "sourceWeights"),
     weights: checkAuthenticityWeights(parts.weights),
     astroturfWeight: checkNumber(parts.astroturfWeight, "astroturfWeight", { min: 0 }),
@@ -204,8 +201,6 @@ function buildConfig(parts: Record<(typeof ANONYMOUS_CONFIG_KEYS)[number], unkno
     astroturf: checkAstroturfRules(parts.astroturf),
     confidence: checkThresholds(parts.confidence, "confidence"),
   });
-  VALIDATED_CONFIGS.add(config);
-  return config;
 }
 
 /**
@@ -247,14 +242,12 @@ export function resolveAnonymousConfig(overrides?: Partial<AnonymousConfig>): An
 }
 
 /**
- * The config a scoring function will actually use. A config returned by
- * {@link resolveAnonymousConfig} (or the example) is already validated and
- * frozen and is used as is. Anything else, such as a hand-built object, is
+ * The config a scoring function will actually use: the caller's config,
  * validated in full and copied once, so the numbers checked are the numbers
- * used even if the caller's object has getters.
+ * used even if the caller's object has getters. (A config from
+ * {@link resolveAnonymousConfig} passes this check by construction.)
  */
 function readConfig(input: unknown): AnonymousConfig {
-  if (typeof input === "object" && input !== null && VALIDATED_CONFIGS.has(input)) return input as AnonymousConfig;
   const record = checkPlainRecord(input, "config");
   rejectUnknownKeys(record, ANONYMOUS_CONFIG_KEYS, "config");
   const { sourceWeights, weights, astroturfWeight, recency, volumeSaturation, astroturf, confidence } = record;
@@ -331,10 +324,9 @@ export interface AssessAuthenticityOptions {
  * with one value and be scored with another. `id` is not read: nothing in the
  * assessment depends on it.
  */
-function snapshotSignal(raw: unknown, label: string): AnonymousSignal {
+function snapshotSignal(raw: unknown, label: string): Observation {
   const { source, sentiment, confidence, publishedAt } = checkRecord(raw, label);
-  const snapshot: AnonymousSignal = {
-    id: "",
+  const snapshot: Observation = {
     source: checkString(source, `${label}.source`),
     sentiment: checkNumber(sentiment, `${label}.sentiment`, { min: -1, max: 1 }),
     confidence: checkNumber(confidence, `${label}.confidence`, { min: 0, max: 1 }),
@@ -346,6 +338,9 @@ function snapshotSignal(raw: unknown, label: string): AnonymousSignal {
   }
   return snapshot;
 }
+
+/** The validated fields of one signal. */
+type Observation = Omit<AnonymousSignal, "id">;
 
 const INSUFFICIENT_REASON =
   "no observation has both a confidence above 0 and a source type with credibility above 0";
@@ -440,9 +435,8 @@ export function assessAuthenticity(
       resolved.weights.recency * recency,
     "positive composite",
   );
-  const penaltyTerm = assertFinite(resolved.astroturfWeight * astroturfPenalty, "astroturf penalty term");
-
-  const trustScore = Math.round(100 * clamp01(positive - penaltyTerm));
+  // astroturfPenalty is in [0, 1], so this product cannot exceed the (finite) weight.
+  const trustScore = Math.round(100 * clamp01(positive - resolved.astroturfWeight * astroturfPenalty));
 
   const components: AuthenticityComponents = { consensus, diversity, volume, recency, astroturfPenalty };
 
@@ -489,7 +483,7 @@ function insufficientAssessment(submitted: number, config: AnonymousConfig): Aut
  * ELIGIBLE observations only, and there is at least one.
  */
 function computeAstroturfPenalty(
-  signals: readonly AnonymousSignal[],
+  signals: readonly Observation[],
   sourceCount: number,
   rules: AstroturfRules,
 ): { penalty: number; flags: AstroturfFlags } {

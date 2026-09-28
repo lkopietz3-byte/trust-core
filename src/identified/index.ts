@@ -132,9 +132,6 @@ const IDENTIFIED_CONFIG_KEYS = [
 ] as const;
 const REPUTATION_CURVE_KEYS = ["floor", "ceil", "neutral"] as const;
 
-/** Configs this module has already validated and frozen; passing one to `scoreEntity` skips re-validation. */
-const VALIDATED_CONFIGS = new WeakSet<object>([EXAMPLE_IDENTIFIED_CONFIG]);
-
 function checkReputationCurve(curve: unknown): ReputationCurve {
   const record = checkPlainRecord(curve, "reputation");
   rejectUnknownKeys(record, REPUTATION_CURVE_KEYS, "reputation");
@@ -147,7 +144,7 @@ function checkReputationCurve(curve: unknown): ReputationCurve {
 
 /** Validate every section once, copy the validated values, and freeze the result. */
 function buildConfig(parts: Record<(typeof IDENTIFIED_CONFIG_KEYS)[number], unknown>): IdentifiedConfig {
-  const config = deepFreeze<IdentifiedConfig>({
+  return deepFreeze<IdentifiedConfig>({
     tierWeights: snapshotWeightMap(parts.tierWeights, "tierWeights"),
     sourceWeights: snapshotWeightMap(parts.sourceWeights, "sourceWeights"),
     proofWeights: snapshotWeightMap(parts.proofWeights, "proofWeights"),
@@ -155,8 +152,6 @@ function buildConfig(parts: Record<(typeof IDENTIFIED_CONFIG_KEYS)[number], unkn
     recency: checkRecencyCurve(parts.recency, "recency"),
     confidence: checkThresholds(parts.confidence, "confidence"),
   });
-  VALIDATED_CONFIGS.add(config);
-  return config;
 }
 
 /**
@@ -197,14 +192,12 @@ export function resolveIdentifiedConfig(overrides?: Partial<IdentifiedConfig>): 
 }
 
 /**
- * The config a scoring function will actually use. A config returned by
- * {@link resolveIdentifiedConfig} (or the example) is already validated and
- * frozen and is used as is. Anything else, such as a hand-built object, is
+ * The config a scoring function will actually use: the caller's config,
  * validated in full and copied once, so the numbers checked are the numbers
- * used even if the caller's object has getters.
+ * used even if the caller's object has getters. (A config from
+ * {@link resolveIdentifiedConfig} passes this check by construction.)
  */
 function readConfig(input: unknown): IdentifiedConfig {
-  if (typeof input === "object" && input !== null && VALIDATED_CONFIGS.has(input)) return input as IdentifiedConfig;
   const record = checkPlainRecord(input, "config");
   rejectUnknownKeys(record, IDENTIFIED_CONFIG_KEYS, "config");
   const { tierWeights, sourceWeights, proofWeights, reputation, recency, confidence } = record;
@@ -345,14 +338,16 @@ function compareText(a: string, b: string): number {
  * order the signals were supplied in.
  */
 function compareContributions(a: SignalContribution, b: SignalContribution): number {
-  if (a.weight !== b.weight) return a.weight > b.weight ? -1 : 1;
-  const byText =
-    compareText(a.id, b.id) || compareText(a.tier, b.tier) || compareText(a.source, b.source) || compareText(a.proof, b.proof);
-  if (byText !== 0) return byText;
-  if (a.ageDays === b.ageDays) return 0;
-  if (a.ageDays === null) return 1;
-  if (b.ageDays === null) return -1;
-  return a.ageDays < b.ageDays ? -1 : 1;
+  if (a.weight !== b.weight) return b.weight - a.weight;
+  const ageA = a.ageDays ?? Infinity;
+  const ageB = b.ageDays ?? Infinity;
+  return (
+    compareText(a.id, b.id) ||
+    compareText(a.tier, b.tier) ||
+    compareText(a.source, b.source) ||
+    compareText(a.proof, b.proof) ||
+    (ageA < ageB ? -1 : ageA > ageB ? 1 : 0)
+  );
 }
 
 export interface EntityScore {

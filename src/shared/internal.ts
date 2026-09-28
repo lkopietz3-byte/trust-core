@@ -23,7 +23,8 @@ const HOSTILE_CHARACTERS = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\
 function escapeHostile(text: string): string {
   return text.replace(HOSTILE_CHARACTERS, (character) => {
     const code = character.codePointAt(0) as number;
-    return code > 0xffff ? `\\u{${code.toString(16)}}` : `\\u${code.toString(16).padStart(4, "0")}`;
+    // Two UTF-16 code units means a code point above the BMP.
+    return character.length === 2 ? `\\u{${code.toString(16)}}` : `\\u${code.toString(16).padStart(4, "0")}`;
   });
 }
 
@@ -90,21 +91,21 @@ export interface NumberRules {
  * `label` names the thing being checked and leads the message.
  */
 export function checkNumber(value: unknown, label: string, rules: NumberRules = {}): number {
-  const { min, max, minExclusive = false, allowInfinity = false } = rules;
+  const { min = -Infinity, max = Infinity, minExclusive = false, allowInfinity = false } = rules;
   if (typeof value !== "number") {
     throw new TypeError(`${label} must be a number (got ${show(value)})`);
   }
   const outOfRange =
     Number.isNaN(value) ||
     (!allowInfinity && !Number.isFinite(value)) ||
-    (min !== undefined && (minExclusive ? value <= min : value < min)) ||
-    (max !== undefined && value > max);
+    (minExclusive ? value <= min : value < min) ||
+    value > max;
   if (outOfRange) {
     const kind = allowInfinity ? "a number" : "a finite number";
     let bounds = "";
-    if (min !== undefined && max !== undefined) bounds = ` between ${min} and ${max}`;
-    else if (min !== undefined) bounds = minExclusive ? ` > ${min}` : ` >= ${min}`;
-    else if (max !== undefined) bounds = ` <= ${max}`;
+    if (min !== -Infinity && max !== Infinity) bounds = ` between ${min} and ${max}`;
+    else if (min !== -Infinity) bounds = minExclusive ? ` > ${min}` : ` >= ${min}`;
+    else if (max !== Infinity) bounds = ` <= ${max}`;
     throw new RangeError(`${label} must be ${kind}${bounds} (got ${show(value)})`);
   }
   return value;
@@ -328,7 +329,9 @@ export function checkTimestamp(value: unknown, label: string): number {
   const minute = m[5] === undefined ? 0 : Number(m[5]);
   const second = m[6] === undefined ? 0 : Number(m[6]);
   const millis = m[7] === undefined ? 0 : Number(`${m[7]}00`.slice(0, 3));
-  if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) return fail();
+  // Month and day ranges are enforced by the roll-over check below (month 0
+  // or 13 and day 0 or 32 all change the date's month or day).
+  if (hour > 23 || minute > 59 || second > 59) return fail();
 
   let offsetMinutes = 0;
   const zone = m[8];
