@@ -8,6 +8,7 @@ import {
   identified,
   anonymous,
   clamp,
+  type Confidence,
   type TrustDialPreset,
 } from "trust-core";
 import {
@@ -75,6 +76,16 @@ const viaNamespaceAnon: AuthenticityAssessment = anonymous.assessAuthenticity([a
   now: "2026-08-01T00:00:00Z",
 });
 if (viaNamespace.score < 0 || viaNamespaceAnon.trustScore < 0) throw new Error("scores should be non-negative");
+
+// The insufficient-evidence outcome is part of the public types.
+const level: Confidence["level"] = anonResult.confidence.level;
+const reason: string | undefined = anonResult.confidence.reason;
+const eligible: number = anonResult.eligibleSignalCount;
+const insufficient: Confidence = { level: "insufficient", effectiveSampleSize: 0, reason: "no evidence" };
+if (typeof level !== "string" || typeof eligible !== "number" || insufficient.reason === undefined) {
+  throw new Error("Confidence and eligibleSignalCount should be typed");
+}
+void reason;
 
 const dialStrength: number = resolveDial("strict");
 const shrunk: number = shrinkTowardPrior(90, 1, 50, dialStrength);
