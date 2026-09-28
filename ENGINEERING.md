@@ -90,6 +90,9 @@ not, even after an unpublish. Treat unpublish as unavailable: prefer fixing forw
 patch version, and use `npm deprecate <name>@"<range>" "<message>"` to warn consumers off a
 bad release while it stays installable for anyone already pinned to it.
 
+Breaking API changes require a major version bump and a CHANGELOG entry explaining what
+changed and why.
+
 ### Runtime support policy
 
 - **Supported (recommended for production):** Node 22 and 24 LTS; Node 26 current.
