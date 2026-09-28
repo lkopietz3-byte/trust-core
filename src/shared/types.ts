@@ -12,18 +12,22 @@
  * Every function takes whatever "now" it needs as an explicit ISO string.
  */
 
-import { checkNumber, deepFreeze, hasOwn, show } from "./internal.js";
+import { assertFinite, checkNumber, checkThresholds, checkTimestamp, deepFreeze, hasOwn, show } from "./internal.js";
 
 // ---------------------------------------------------------------------------
 // Bounding
 // ---------------------------------------------------------------------------
 
-/** Clamp `value` into `[min, max]`. */
+/**
+ * Clamp `value` into `[min, max]`. `NaN` passes through unchanged: the scoring
+ * functions validate and check finiteness before they clamp, so `clamp` never
+ * has to hide a `NaN`.
+ */
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-/** Clamp `value` into `[0, 1]`. The unit interval both modules compute in. */
+/** Clamp `value` into `[0, 1]`, the unit interval both modules compute in. `NaN` passes through unchanged (see {@link clamp}). */
 export function clamp01(value: number): number {
   return clamp(value, 0, 1);
 }
@@ -51,10 +55,19 @@ export type Weight = number;
  * is deliberate: {@link recencyDecay} is a continuous exponential curve, and
  * rounding here would introduce needless day-sized steps in it. Can be
  * negative when `toISO` is earlier than `fromISO`.
+ *
+ * Both arguments use the strict timestamp grammar of the scoring functions'
+ * clocks: `YYYY-MM-DD` (read as midnight UTC) or a date-time with an explicit
+ * `Z` or `+HH:MM` offset. A zone-less date-time is rejected instead of being
+ * read in the process's local zone, and an impossible date such as
+ * `2026-02-30` is rejected instead of rolling forward.
+ *
+ * @throws TypeError if either argument is not a string.
+ * @throws RangeError if either string is not a valid timestamp in that grammar.
  */
 export function daysBetween(fromISO: string, toISO: string): number {
   const MS_PER_DAY = 24 * 60 * 60 * 1000;
-  return (Date.parse(toISO) - Date.parse(fromISO)) / MS_PER_DAY;
+  return (checkTimestamp(toISO, "toISO") - checkTimestamp(fromISO, "fromISO")) / MS_PER_DAY;
 }
 
 /**
@@ -62,8 +75,17 @@ export function daysBetween(fromISO: string, toISO: string): number {
  * `halfLifeDays`. Both modules use this — identified signals decay by how
  * long ago the underlying event happened; anonymous signals decay by how
  * long ago the material was published.
+ *
+ * A negative `ageDays` counts as age 0 (full weight). `halfLifeDays <= 0`
+ * means instant decay: full weight at age 0, none after. `Infinity` for
+ * `halfLifeDays` means never decays.
+ *
+ * @throws TypeError if either argument is not a number.
+ * @throws RangeError if either argument is `NaN`.
  */
 export function recencyDecay(ageDays: number, halfLifeDays: number): number {
+  checkNumber(ageDays, "ageDays", { allowInfinity: true });
+  checkNumber(halfLifeDays, "halfLifeDays", { allowInfinity: true });
   if (halfLifeDays <= 0) return ageDays <= 0 ? 1 : 0;
   return Math.pow(0.5, Math.max(0, ageDays) / halfLifeDays);
 }
@@ -85,6 +107,12 @@ export function recencyDecay(ageDays: number, halfLifeDays: number): number {
  * gets `prior` back rather than `NaN` from a `0 / 0` when there is also no
  * evidence. As `totalWeight` grows past `dial`, the result converges on the
  * unshrunk weighted mean.
+ *
+ * @throws TypeError if an argument is not a number.
+ * @throws RangeError if an argument is `NaN` or infinite, `totalWeight` or
+ *   `dial` is negative, or the denominator, the `dial * prior` term, the
+ *   numerator or the quotient overflows. It never returns `NaN`, `Infinity`,
+ *   or a value that overflow has silently distorted.
  */
 export function shrinkTowardPrior(
   weightedSum: number,
@@ -92,8 +120,17 @@ export function shrinkTowardPrior(
   prior: number,
   dial: number,
 ): number {
-  const denominator = totalWeight + dial;
-  return denominator > 0 ? (weightedSum + dial * prior) / denominator : prior;
+  checkNumber(weightedSum, "weightedSum");
+  checkNumber(totalWeight, "totalWeight", { min: 0 });
+  checkNumber(prior, "prior");
+  checkNumber(dial, "dial", { min: 0 });
+  const denominator = assertFinite(totalWeight + dial, "shrinkage denominator (totalWeight + dial)");
+  const priorTerm = assertFinite(dial * prior, "shrinkage prior term (dial * prior)");
+  const numerator = assertFinite(weightedSum + priorTerm, "shrinkage numerator (weightedSum + dial * prior)");
+  // No weight, no evidence: return the prior itself. The quotient
+  // (dial * prior) / dial is NOT always `prior` to the last bit.
+  if (totalWeight === 0) return prior;
+  return assertFinite(numerator / denominator, "shrunk score");
 }
 
 /**
@@ -103,13 +140,32 @@ export function shrinkTowardPrior(
  */
 export type TrustDialPreset = "as_is" | "balanced" | "strict";
 
+/** One named shrinkage preset: a strength plus human-readable text for a UI. */
 export interface TrustDial {
   /** Shrinkage strength, in phantom prior signals. */
   C: number;
+  /** Short display name, such as `"Balanced"`. */
   label: string;
+  /** One sentence describing how hard the preset pulls toward the prior. */
   description: string;
 }
 
+/**
+ * The three named shrinkage presets, keyed by {@link TrustDialPreset}:
+ *
+ * | Preset | `C` | Meaning |
+ * | --- | --- | --- |
+ * | `as_is` | 0.5 | Almost no pull toward the prior. |
+ * | `balanced` | 4 | Pulls thin evidence gently toward the prior. The default of `scoreEntity`. |
+ * | `strict` | 12 | Needs deep, credible evidence before a score stands on its own. |
+ *
+ * `C` is the number of "phantom prior signals" passed to
+ * {@link shrinkTowardPrior}: with `C = 4`, four average-credibility signals
+ * that all said `prior` are mixed in before the real evidence. The object and
+ * every preset in it are deep-frozen. These values are illustrative starting
+ * points, not calibrated for any domain; pass a raw number wherever a dial is
+ * accepted to use your own strength.
+ */
 export const TRUST_DIALS: Record<TrustDialPreset, TrustDial> = deepFreeze({
   as_is: {
     C: 0.5,
@@ -138,11 +194,20 @@ export const TRUST_DIALS: Record<TrustDialPreset, TrustDial> = deepFreeze({
  * prototype-chain name such as `"constructor"` or `"toString"` is rejected
  * with a clear error instead of resolving to an inherited, non-numeric `.C`.
  *
+ * @throws TypeError if `dial` is neither a number nor a string (an array, a
+ *   `String` object, `null`, ... are never coerced into a preset name).
  * @throws RangeError if `dial` is a negative/non-finite number, or a string
  *   that is not one of `"as_is" | "balanced" | "strict"`.
  */
 export function resolveDial(dial: TrustDialPreset | number): number {
   if (typeof dial === "number") return checkNumber(dial, "dial", { min: 0 });
+  // Object.hasOwn coerces its key: ["balanced"], new String("strict") and an
+  // object with a toString would all pass as a preset name without this check.
+  if (typeof dial !== "string") {
+    throw new TypeError(
+      `dial must be a preset name (${Object.keys(TRUST_DIALS).join(", ")}) or a non-negative number (got ${show(dial)})`,
+    );
+  }
   if (!hasOwn(TRUST_DIALS, dial)) {
     throw new RangeError(
       `dial must be one of ${Object.keys(TRUST_DIALS).join(", ")}, or a non-negative number (got ${show(dial)})`,
@@ -156,12 +221,18 @@ export function resolveDial(dial: TrustDialPreset | number): number {
 // ---------------------------------------------------------------------------
 
 /**
- * How much credible evidence backs a score. Three bands: enough to stand on
- * its own (`high`), enough to lean on but keep shrinking (`moderate`), or not
- * enough to trust much beyond the baseline (`thin`).
+ * How much credible evidence backs a score. Four levels:
+ *
+ * - `high`: enough to stand on its own.
+ * - `moderate`: enough to lean on but keep shrinking.
+ * - `thin`: some evidence, but not enough to trust much beyond the baseline.
+ * - `insufficient`: NO evidence carried any weight (effective sample size 0).
+ *   There is nothing to be confident about, whatever the thresholds are.
+ *   Check for this level before reading a score.
  */
-export type ConfidenceLevel = "high" | "moderate" | "thin";
+export type ConfidenceLevel = "high" | "moderate" | "thin" | "insufficient";
 
+/** Effective-sample-size cut-offs for the confidence levels. */
 export interface ConfidenceThresholds {
   /** Effective sample size at/above which confidence is "high". */
   high: number;
@@ -169,22 +240,39 @@ export interface ConfidenceThresholds {
   moderate: number;
 }
 
+/** A confidence label together with the sample size it was derived from. */
 export interface Confidence {
+  /** How much credible evidence backs the score. */
   level: ConfidenceLevel;
   /** The effective (credibility-weighted) sample size the label was derived from. */
   effectiveSampleSize: number;
+  /** Why there is no confidence to report. Present only when `level` is `"insufficient"`. */
+  reason?: string;
 }
 
-/** Derive a confidence label from an effective sample size and its thresholds. */
+/**
+ * Derive a confidence label from an effective sample size and its thresholds.
+ * A sample size of exactly 0 is `"insufficient"` (with a `reason`) even when a
+ * threshold is 0; any positive size is `"thin"`, `"moderate"` or `"high"`.
+ *
+ * @throws TypeError if `effectiveSampleSize` is not a number or `thresholds`
+ *   is not an object with exactly `high` and `moderate`.
+ * @throws RangeError if `effectiveSampleSize` is `NaN` or negative, or the
+ *   thresholds are `NaN`, negative, or `moderate > high`.
+ */
 export function confidenceFromSampleSize(
   effectiveSampleSize: number,
   thresholds: ConfidenceThresholds,
 ): Confidence {
-  const level: ConfidenceLevel =
-    effectiveSampleSize >= thresholds.high
-      ? "high"
-      : effectiveSampleSize >= thresholds.moderate
-        ? "moderate"
-        : "thin";
-  return { level, effectiveSampleSize };
+  const n = checkNumber(effectiveSampleSize, "effectiveSampleSize", { min: 0, allowInfinity: true });
+  const { high, moderate } = checkThresholds(thresholds, "thresholds");
+  if (n === 0) {
+    return {
+      level: "insufficient",
+      effectiveSampleSize: 0,
+      reason: "no evidence carried any weight (effective sample size is 0)",
+    };
+  }
+  const level: ConfidenceLevel = n >= high ? "high" : n >= moderate ? "moderate" : "thin";
+  return { level, effectiveSampleSize: n };
 }

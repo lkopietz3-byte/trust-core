@@ -105,7 +105,8 @@ describe("assessAuthenticity — flags manipulation", () => {
     const plantedResult = assessAuthenticity(planted, config, { now: NOW });
     const genuineResult = assessAuthenticity(genuine, config, { now: NOW });
 
-    expect(plantedResult.trustScore).toBeLessThan(genuineResult.trustScore);
+    expect(genuineResult.trustScore).not.toBeNull();
+    expect(plantedResult.trustScore).toBeLessThan(genuineResult.trustScore as number);
   });
 });
 
@@ -213,7 +214,10 @@ describe("README worked example reproduces exactly", () => {
     expect(verdict.components.recency).toBeCloseTo(0.9380486285411919, 9);
     expect(verdict.components.astroturfPenalty).toBe(0);
     expect(verdict.confidence).toEqual({ level: "moderate", effectiveSampleSize: 3 });
-    expect(verdict.explanation).toBe("Trust 83/100 across 3 independent sources. Sentiment is strongly positive.");
+    expect(verdict.explanation).toBe(
+      "Heuristic score 83/100 from 3 distinct source types (independence not verified). Sentiment is strongly positive.",
+    );
+    expect(verdict.eligibleSignalCount).toBe(3);
   });
 });
 
@@ -327,7 +331,8 @@ describe("resolveAnonymousConfig — configuration validation", () => {
     const signals = [sig("forum", 0.6), sig("marketplace", 0.5)];
     const halfResult = assessAuthenticity(signals, half, { now: NOW });
     const fullResult = assessAuthenticity(signals, full, { now: NOW });
-    expect(halfResult.trustScore).toBeLessThan(fullResult.trustScore);
+    expect(fullResult.trustScore).not.toBeNull();
+    expect(halfResult.trustScore).toBeLessThan(fullResult.trustScore as number);
   });
 });
 
@@ -368,11 +373,15 @@ describe("property: authenticity invariants over randomized inputs (seeded)", ()
     });
   }
 
-  it("trustScore always stays within the documented [0, 100] range", () => {
+  it("trustScore is null exactly when evidence is insufficient, otherwise an integer in [0, 100]", () => {
     for (let trial = 0; trial < 200; trial++) {
       const n = Math.floor(rand() * 15);
       const signals = Array.from({ length: n }, randomSignal);
       const result = assessAuthenticity(signals, config, { now: NOW });
+      if (result.confidence.level === "insufficient") {
+        expect(result.trustScore).toBeNull();
+        continue;
+      }
       expect(result.trustScore).toBeGreaterThanOrEqual(0);
       expect(result.trustScore).toBeLessThanOrEqual(100);
       expect(Number.isInteger(result.trustScore)).toBe(true);
@@ -412,13 +421,12 @@ describe("property: authenticity invariants over randomized inputs (seeded)", ()
     }
   });
 
-  it("handles empty signals with a defined score and no crash", () => {
+  it("handles empty signals without crashing and reports no score", () => {
     const result = assessAuthenticity([], config, { now: NOW });
     expect(result.sourceCount).toBe(0);
     expect(result.signalCount).toBe(0);
-    expect(Number.isFinite(result.trustScore)).toBe(true);
-    expect(result.trustScore).toBeGreaterThanOrEqual(0);
-    expect(result.trustScore).toBeLessThanOrEqual(100);
+    expect(result.trustScore).toBeNull();
+    expect(result.confidence.level).toBe("insufficient");
   });
 
   it("stays numerically well-behaved with a large number of signals (no NaN/Infinity)", () => {
@@ -427,5 +435,38 @@ describe("property: authenticity invariants over randomized inputs (seeded)", ()
     expect(Number.isFinite(result.trustScore)).toBe(true);
     expect(Number.isFinite(result.components.consensus)).toBe(true);
     expect(Number.isFinite(result.components.recency)).toBe(true);
+  });
+});
+
+describe("derived values must stay finite or throw RangeError (TC-001)", () => {
+  const good = [sig("forum", 0.5), sig("blog", 0.2), sig("marketplace", 0.1)];
+
+  it("rejects a positive composite that overflows instead of reporting a plausible 100", () => {
+    const huge = resolveAnonymousConfig({
+      weights: { consensus: Number.MAX_VALUE, diversity: Number.MAX_VALUE, volume: 0, recency: 0 },
+    });
+    expect(() => assessAuthenticity(good, huge, { now: NOW })).toThrow(RangeError);
+  });
+
+  it("rejects Infinity - Infinity instead of returning a NaN trustScore", () => {
+    const huge = resolveAnonymousConfig({
+      weights: { consensus: Number.MAX_VALUE, diversity: Number.MAX_VALUE, volume: 0, recency: 0 },
+      astroturfWeight: Number.MAX_VALUE,
+    });
+    const flagged = [sig("forum", 0.95), sig("forum", 0.95), sig("forum", 0.95)];
+    expect(() => assessAuthenticity(flagged, huge, { now: NOW })).toThrow(RangeError);
+  });
+
+  it("rejects source credibility weights whose sum overflows", () => {
+    const heavy = resolveAnonymousConfig({ sourceWeights: { forum: Number.MAX_VALUE, blog: Number.MAX_VALUE } });
+    expect(() =>
+      assessAuthenticity([sig("forum", 0.5, { confidence: 1 }), sig("blog", 0.5, { confidence: 1 })], heavy, { now: NOW }),
+    ).toThrow(RangeError);
+  });
+
+  it("still accepts one very large but finite credibility weight", () => {
+    const heavy = resolveAnonymousConfig({ sourceWeights: { forum: Number.MAX_VALUE } });
+    const r = assessAuthenticity([sig("forum", 0.5, { confidence: 1 })], heavy, { now: NOW });
+    expect(Number.isFinite(r.trustScore)).toBe(true);
   });
 });

@@ -90,6 +90,10 @@ const anonResult = anonymous.assessAuthenticity(anonSignals, anonConfig, { now: 
 assert.equal(typeof anonResult.trustScore, "number");
 assert.ok(Number.isInteger(anonResult.trustScore) && anonResult.trustScore >= 0 && anonResult.trustScore <= 100);
 assert.equal(anonResult.sourceCount, 2);
+// No eligible evidence: no score at all, rather than a misleading 0.
+const noAnonEvidence = anonymous.assessAuthenticity([], anonConfig, { now: "2026-08-01T00:00:00Z" });
+assert.equal(noAnonEvidence.trustScore, null);
+assert.equal(noAnonEvidence.confidence.level, "insufficient");
 assert.equal(typeof anonResult.explanation, "string");
 
 // Validation: out-of-range sentiment must throw.
@@ -98,6 +102,38 @@ assert.throws(
   RangeError,
   "an out-of-range sentiment should throw, not silently corrupt the composite",
 );
+
+// No eligible evidence is an explicit, documented outcome, never a confident-looking score.
+const ignored = anonymous.assessAuthenticity(
+  [
+    { id: "z1", source: "forum", sentiment: 0.9, confidence: 0, publishedAt: "2026-07-01T00:00:00Z" },
+    { id: "z2", source: "unclassified", sentiment: 0.9, confidence: 1, publishedAt: "2026-07-01T00:00:00Z" },
+  ],
+  anonConfig,
+  { now: "2026-08-01T00:00:00Z" },
+);
+assert.equal(ignored.confidence.level, "insufficient");
+assert.equal(ignored.trustScore, null);
+assert.equal(ignored.eligibleSignalCount, 0);
+assert.equal(ignored.signalCount, 2);
+assert.equal(ignored.sourceCount, 0);
+assert.match(ignored.explanation, /^Insufficient evidence/);
+const noEvidence = identified.scoreEntity([], idConfig, { now: "2026-08-01T00:00:00Z", prior: 61.7, dial: 3 });
+assert.equal(noEvidence.confidence.level, "insufficient");
+assert.equal(noEvidence.score, 61.7);
+assert.equal(noEvidence.raw, null);
+
+// Derived overflow is an explicit RangeError, not NaN or an overflow-clamped score.
+assert.throws(
+  () => identified.scoreEntity([idSignals[0]], idConfig, { now: "2026-08-01T00:00:00Z", prior: 50, dial: Number.MAX_VALUE }),
+  RangeError,
+  "a dial that overflows dial * prior should throw",
+);
+
+// Only undefined means "use the defaults".
+assert.throws(() => identified.resolveIdentifiedConfig(null), TypeError);
+assert.throws(() => anonymous.resolveAnonymousConfig({ recency: false }), TypeError);
+assert.equal(identified.resolveIdentifiedConfig(undefined), identified.EXAMPLE_IDENTIFIED_CONFIG);
 
 // --- immutability: exported example configs cannot be mutated by a consumer ---
 assert.throws(() => {

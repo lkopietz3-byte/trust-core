@@ -115,8 +115,8 @@ describe("confidenceFromSampleSize", () => {
     expect(confidenceFromSampleSize(2.999, thresholds).level).toBe("thin");
   });
 
-  it("labels 0 as thin", () => {
-    expect(confidenceFromSampleSize(0, thresholds).level).toBe("thin");
+  it("labels 0 as insufficient, not thin: with no evidence there is nothing to be confident about", () => {
+    expect(confidenceFromSampleSize(0, thresholds).level).toBe("insufficient");
   });
 
   it("carries the effective sample size through unchanged", () => {
@@ -160,5 +160,52 @@ describe("TRUST_DIALS / resolveDial", () => {
   it("TRUST_DIALS and its entries are frozen", () => {
     expect(Object.isFrozen(TRUST_DIALS)).toBe(true);
     expect(Object.isFrozen(TRUST_DIALS.balanced)).toBe(true);
+  });
+});
+
+describe("derived values must stay finite (TC-001)", () => {
+  it("shrinkTowardPrior rejects a dial*prior product that overflows instead of returning an overflow-clamped result", () => {
+    expect(() => shrinkTowardPrior(50, 1, 50, Number.MAX_VALUE)).toThrow(RangeError);
+  });
+
+  it("shrinkTowardPrior rejects a totalWeight+dial sum that overflows (it would otherwise divide to a plausible 0)", () => {
+    expect(() => shrinkTowardPrior(1, Number.MAX_VALUE, 50, Number.MAX_VALUE)).toThrow(RangeError);
+  });
+
+  it("shrinkTowardPrior rejects a numerator that overflows", () => {
+    expect(() => shrinkTowardPrior(Number.MAX_VALUE, 1, Number.MAX_VALUE, 4)).toThrow(RangeError);
+  });
+
+  it("shrinkTowardPrior rejects NaN inputs instead of returning NaN", () => {
+    expect(() => shrinkTowardPrior(Number.NaN, 1, 50, 4)).toThrow(RangeError);
+  });
+
+  it("still returns large finite results when nothing overflows", () => {
+    expect(shrinkTowardPrior(5e300, 1e299, 50, 4)).toBeCloseTo(50, 5);
+  });
+
+  it("recencyDecay rejects NaN age or half-life instead of returning NaN", () => {
+    expect(() => recencyDecay(Number.NaN, 100)).toThrow(RangeError);
+    expect(() => recencyDecay(1, Number.NaN)).toThrow(RangeError);
+  });
+
+  it("daysBetween rejects a malformed timestamp instead of returning NaN", () => {
+    expect(() => daysBetween("garbage", "2026-01-01T00:00:00Z")).toThrow(RangeError);
+    expect(() => daysBetween("2026-01-01T00:00:00Z", "2026-13-01")).toThrow(RangeError);
+    expect(() => daysBetween("2026-01-01T00:00:00Z", 5 as never)).toThrow(TypeError);
+  });
+
+  it("daysBetween ignores the process time zone: a zone-less date-time is rejected, not read as local", () => {
+    expect(() => daysBetween("2026-01-01T00:00:00", "2026-01-02T00:00:00Z")).toThrow(RangeError);
+  });
+
+  it("confidenceFromSampleSize rejects NaN or negative sample sizes instead of labeling them thin", () => {
+    expect(() => confidenceFromSampleSize(Number.NaN, { high: 8, moderate: 3 })).toThrow(RangeError);
+    expect(() => confidenceFromSampleSize(-1, { high: 8, moderate: 3 })).toThrow(RangeError);
+  });
+
+  it("confidenceFromSampleSize rejects malformed thresholds", () => {
+    expect(() => confidenceFromSampleSize(1, { high: 3, moderate: 8 })).toThrow(RangeError);
+    expect(() => confidenceFromSampleSize(1, null as never)).toThrow(TypeError);
   });
 });

@@ -15,6 +15,19 @@
   `NaN`, `Infinity`, an unknown config key, a prototype-chain lookup key such
   as `"constructor"`) throws a `TypeError`/`RangeError`. It never silently
   degrades into a plausible-looking but wrong score.
+- **Finite results.** A value derived from valid inputs (a weight product, a
+  sum, a shrinkage term) that overflows or is not finite is a `RangeError`,
+  never `NaN`, `Infinity`, or an overflow the final clamp turns into `100`.
+- **Only `undefined` means defaults.** `resolve*Config` accepts `undefined` or
+  a plain object; every other value is a `TypeError`, and each section is
+  validated before it is merged. Scoring functions validate the config they
+  are given and read each caller field once.
+- **Eligible evidence only.** A zero-weight signal (identified) or an
+  observation with confidence 0 or a zero-credibility source type (anonymous)
+  contributes nothing to any output. With no eligible evidence,
+  `confidence.level` is `"insufficient"` with a `reason`.
+- **Stable order.** `contributions` ties are broken by id, tier, source, proof,
+  then age, so input order never changes the result.
 - **Immutability.** `EXAMPLE_IDENTIFIED_CONFIG`, `EXAMPLE_ANONYMOUS_CONFIG`,
   `TRUST_DIALS`, and every config `resolveIdentifiedConfig`/
   `resolveAnonymousConfig` returns are deep-frozen.
@@ -25,22 +38,28 @@
 ```bash
 npm ci                # install pinned dev toolchain
 npm run verify         # lint + typecheck + test + build + verify:package
-npm audit --include=dev
+npm run attw           # are-the-types-wrong on the packed tarball (node10, node16, bundler)
+npm run audit:dependencies
 ```
 
-`npm run verify:package` packs the built tarball, installs it into a clean
-temp project, imports every `exports` entry by its public specifier, checks
-the result against `api-surface.json` (a deliberate diff on any public API
-change), and runs `scripts/consumer-probe.mjs`/`.cjs`/`.mts` — probes that
-import (or `require()`) the package by name and assert real outputs, not
-just "it exports something." Regenerate `api-surface.json` with
-`node scripts/verify-package.mjs --update-api` and review the diff.
+Mutation testing is run locally, not in CI: `npm i -D --no-save
+@stryker-mutator/core @stryker-mutator/vitest-runner`, then `npx stryker run`
+with an uncommitted `stryker.config.json` (`testRunner: "vitest"`,
+`mutate: ["src/**/*.ts", "!src/**/*.test.ts"]`). The 0.2.0 run scored 99.02%
+(913 of 922 mutants killed or timed out; it was 57.2% before the fix pass). The 9
+survivors are: `w <= 0` vs `w < 0` in `composeDimensions` (a zero weight adds zero, so
+equivalent), the `<` vs `<=` swap on equal magnitudes in `exactSum` (the swap is
+symmetric, so equivalent), and 7 in the final rounding step of `exactSum` (an early-exit
+test and the sign tests of its round-half-even correction). A 20,000-case BigInt oracle
+plus constructed near-ties could not separate those 7 from the original, so treat them as
+unproven equivalents, not as proven ones.
 
 ## Packaging
 
 This is an ESM package; `exports`' `default` condition also lets plain
 CommonJS `require("trust-core")` work, on Node 20.19+/22.12+ (`require(esm)`
-support — see README). `.js.map` files ship with `inlineSources` so
+support — see README). `typesVersions` maps the `identified`, `anonymous` and `shared` subpaths for
+legacy `moduleResolution: node` (node10). `.js.map` files ship with `inlineSources` so
 go-to-definition resolves without `src/` in the tarball; `.d.ts.map` is
 turned off (`declarationMap: false`) for the same reason, rather than shipping
 `src/` just to back it.
@@ -71,7 +90,9 @@ rejected to avoid the dual-package hazard (two separately-identified copies of t
 with broken `instanceof` checks and duplicated module state across the CJS and ESM entry
 points).
 
-`attw`'s strict Node 10 resolution check currently fails for this package's `./identified`, `./anonymous`, and `./shared` subpath exports because there is no `typesVersions` fallback for a CommonJS-style (`moduleResolution: node`) resolver. CI runs with `--profile node16` to stay green while that's true. Fixing it needs a `typesVersions` entry in `package.json`, which ships in the npm tarball — out of scope for this repo-hygiene pass; it is planned for the per-kit follow-up pass.
+`attw` checks the node10, node16 (CJS and ESM) and bundler profiles for all four
+entry points; `typesVersions` is what makes the node10 column resolve the subpaths.
+`verify:package` also type-checks the consumer probe under node10 resolution.
 
 ## Release and rollback
 
@@ -90,19 +111,21 @@ not, even after an unpublish. Treat unpublish as unavailable: prefer fixing forw
 patch version, and use `npm deprecate <name>@"<range>" "<message>"` to warn consumers off a
 bad release while it stays installable for anyone already pinned to it.
 
-Breaking API changes require a major version bump and a CHANGELOG entry explaining what
-changed and why.
+Breaking API changes require a CHANGELOG entry explaining what changed and why. While the
+version is 0.x, a change that makes a previously accepted input throw or return a different
+result bumps the MINOR version (0.1.0 to 0.2.0); from 1.0 it requires a major bump.
 
 ### Runtime support policy
 
 - **Supported (recommended for production):** Node 22 and 24 LTS; Node 26 current.
 - **Compatibility-tested:** Node 20. Node 20 is end-of-life — nodejs.org's release page
   (<https://nodejs.org/en/about/previous-releases>) lists it as `EOL`, with its final release
-  dated Mar 24, 2026. The `compat` job in `verify.yml` still runs on Node 20 to catch
+  dated Mar 24, 2026. The `compat` job in `verify.yml` still runs on Node 20.19.0 to catch
   regressions, but that runtime gets no security fixes upstream; don't run production traffic
   on it.
 - CommonJS `require()` of this package needs Node >=20.19 or >=22.12 (`require(esm)`
-  support). ESM `import` works on every version this package tests (20, 22, 24).
+  support). ESM `import` works on every version this package tests (20.19.0, 22.12.0, 24).
+  The `compat` job pins the two `require(esm)` floors exactly.
 - `engines` in `package.json` is unchanged by this policy.
 
 ### Publishing with provenance
@@ -111,9 +134,11 @@ changed and why.
 `workflow_dispatch` or a pushed `v*` tag, requests a short-lived OIDC token instead of
 reading a stored npm token (`permissions: id-token: write`), and runs a plain `npm publish`
 with no token and no `--provenance` flag, because provenance attestation is generated
-automatically under trusted publishing. Before publishing, the workflow confirms the tag
-matches `package.json`'s `version` and checks whether that version is already on the
-registry, so re-running it on a version that's already published is a no-op rather than an
-error. Trusted publishing must be configured for this package on npmjs.com (linking it to this
+automatically under trusted publishing. Both triggers must run on a `v*` tag that matches
+`package.json`'s `version`; a manual run from a branch fails. Before publishing, the job runs
+`npm run audit:dependencies`, `npm run verify` and `npm run attw`, then asks the registry about
+`name@version`: only a confirmed `E404` means "not published yet". Any other registry error
+(outage, auth, network) fails the job instead of guessing, and an already-published version is a
+no-op. Trusted publishing must be configured for this package on npmjs.com (linking it to this
 GitHub repository and the `release.yml` workflow) before the first automated release will
 work.

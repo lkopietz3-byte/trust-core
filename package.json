@@ -1,6 +1,6 @@
 {
   "name": "trust-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Deterministic entity-trust scoring: weight known contributors' signals, and gauge how organic anonymous sentiment looks. Zero runtime dependencies.",
   "keywords": [
     "trust",
@@ -46,6 +46,19 @@
       "default": "./dist/shared/types.js"
     }
   },
+  "typesVersions": {
+    "*": {
+      "identified": [
+        "./dist/identified/index.d.ts"
+      ],
+      "anonymous": [
+        "./dist/anonymous/index.d.ts"
+      ],
+      "shared": [
+        "./dist/shared/types.d.ts"
+      ]
+    }
+  },
   "sideEffects": false,
   "files": [
     "dist",
@@ -64,7 +77,7 @@
     "lint": "eslint . --max-warnings=0",
     "audit:dependencies": "npm audit --package-lock-only --include=dev --ignore-scripts --audit-level=low",
     "verify:package": "node scripts/verify-package.mjs",
-    "attw": "attw --pack . --ignore-rules cjs-resolves-to-esm --profile node16",
+    "attw": "attw --pack . --ignore-rules cjs-resolves-to-esm",
     "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run verify:package",
     "prepublishOnly": "npm run verify"
   },

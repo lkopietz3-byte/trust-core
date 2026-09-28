@@ -186,6 +186,7 @@ function supportsRequireEsm(version) {
 // 8. Optional strict type probe --------------------------------------------------------------
 const typeProbe = join(root, 'scripts', 'consumer-probe.mts');
 let typeChecked = false;
+let node10Checked = false;
 if (existsSync(typeProbe)) {
   copyFileSync(typeProbe, join(consumer, 'probe.mts'));
   run(process.execPath, [
@@ -194,6 +195,14 @@ if (existsSync(typeProbe)) {
     '--skipLibCheck', 'false', 'probe.mts',
   ], consumer);
   typeChecked = true;
+  // Legacy `moduleResolution: node` ignores `exports`; `typesVersions` is what
+  // lets it find the subpath declarations (trust-core/identified, ...).
+  run(process.execPath, [
+    join(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict',
+    '--module', 'ESNext', '--moduleResolution', 'node10', '--target', 'ES2022',
+    '--skipLibCheck', 'false', 'probe.mts',
+  ], consumer);
+  node10Checked = true;
 }
 
 console.log(JSON.stringify({
@@ -205,4 +214,5 @@ console.log(JSON.stringify({
   apiSurfaceChecked: !updateApi,
   commonjsChecked,
   strictDeclarationsChecked: typeChecked,
+  node10DeclarationsChecked: node10Checked,
 }));

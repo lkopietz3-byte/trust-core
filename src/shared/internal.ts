@@ -16,16 +16,36 @@
 // Describing values in error messages
 // ---------------------------------------------------------------------------
 
-/** Render an arbitrary value for an error message without throwing. */
+/** Characters that could forge structure or drive a terminal when printed: controls, format (bidi) characters, invisible fillers, line and paragraph separators. */
+const HOSTILE_CHARACTERS = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029]/gu;
+
+/** Replace each hostile character with a visible `\uXXXX` (or `\u{X}` above the BMP) escape. */
+function escapeHostile(text: string): string {
+  return text.replace(HOSTILE_CHARACTERS, (character) => {
+    const code = character.codePointAt(0) as number;
+    // Two UTF-16 code units means a code point above the BMP.
+    return character.length === 2 ? `\\u{${code.toString(16)}}` : `\\u${code.toString(16).padStart(4, "0")}`;
+  });
+}
+
+/**
+ * Render an arbitrary value for an error message without throwing. Strings
+ * are quoted, cut at 48 characters, and have control, line-separator and
+ * bidi/format characters escaped, so a caller-supplied string cannot forge a
+ * second line, recolor a terminal, or reorder the text around it. Objects,
+ * functions and arrays are described by kind and never stringified, so a
+ * hostile `toString`/`toJSON`, a cycle, or a `BigInt` cannot make the error
+ * path itself throw.
+ */
 export function show(value: unknown): string {
   if (typeof value === "string") {
-    return JSON.stringify(value.length > 48 ? `${value.slice(0, 48)}...` : value);
+    return escapeHostile(JSON.stringify(value.length > 48 ? `${value.slice(0, 48)}...` : value));
   }
   if (Array.isArray(value)) return "an array";
   if (value === null) return "null";
   if (typeof value === "object") return "an object";
   if (typeof value === "function") return "a function";
-  if (typeof value === "symbol") return value.toString();
+  if (typeof value === "symbol") return escapeHostile(value.toString());
   // Only number | boolean | undefined | bigint remain, none of which stringify
   // through Object's default ("[object Object]") toString — verified by
   // no-unnecessary-type-assertion, which confirms TS has already narrowed
@@ -39,6 +59,21 @@ export function show(value: unknown): string {
 // ---------------------------------------------------------------------------
 // Number validation
 // ---------------------------------------------------------------------------
+
+/**
+ * Return `value` if it is a finite number; otherwise throw `RangeError`.
+ * Used on DERIVED values (a product of weights, a shrinkage term, a sum) that
+ * can overflow or become `NaN` even when every input was individually valid.
+ * `what` names the derived quantity in the message.
+ */
+export function assertFinite(value: number, what: string): number {
+  if (!Number.isFinite(value)) {
+    throw new RangeError(
+      `trust-core: ${what} is not a finite number (got ${show(value)}); an input is too large for double-precision arithmetic`,
+    );
+  }
+  return value;
+}
 
 export interface NumberRules {
   /** Inclusive lower bound (exclusive when `minExclusive`). */
@@ -56,21 +91,21 @@ export interface NumberRules {
  * `label` names the thing being checked and leads the message.
  */
 export function checkNumber(value: unknown, label: string, rules: NumberRules = {}): number {
-  const { min, max, minExclusive = false, allowInfinity = false } = rules;
+  const { min = -Infinity, max = Infinity, minExclusive = false, allowInfinity = false } = rules;
   if (typeof value !== "number") {
     throw new TypeError(`${label} must be a number (got ${show(value)})`);
   }
   const outOfRange =
     Number.isNaN(value) ||
     (!allowInfinity && !Number.isFinite(value)) ||
-    (min !== undefined && (minExclusive ? value <= min : value < min)) ||
-    (max !== undefined && value > max);
+    (minExclusive ? value <= min : value < min) ||
+    value > max;
   if (outOfRange) {
     const kind = allowInfinity ? "a number" : "a finite number";
     let bounds = "";
-    if (min !== undefined && max !== undefined) bounds = ` between ${min} and ${max}`;
-    else if (min !== undefined) bounds = minExclusive ? ` > ${min}` : ` >= ${min}`;
-    else if (max !== undefined) bounds = ` <= ${max}`;
+    if (min !== -Infinity && max !== Infinity) bounds = ` between ${min} and ${max}`;
+    else if (min !== -Infinity) bounds = minExclusive ? ` > ${min}` : ` >= ${min}`;
+    else if (max !== Infinity) bounds = ` <= ${max}`;
     throw new RangeError(`${label} must be ${kind}${bounds} (got ${show(value)})`);
   }
   return value;
@@ -81,9 +116,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Throw `TypeError` unless `value` is a non-null, non-array object. */
+/** Throw `TypeError` unless `value` is a non-null, non-array object (class instances with fields are fine, e.g. signals). */
 export function checkRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) throw new TypeError(`${label} must be an object (got ${show(value)})`);
+  return value;
+}
+
+/**
+ * True for a plain record: an object literal, `JSON.parse` output, or a
+ * null-prototype object. Arrays, `Map`, `Set`, `Date`, `RegExp`, functions and
+ * class instances are not plain. A record from another realm counts (its
+ * prototype's own prototype is `null`), so config crossing a `vm` boundary
+ * still works.
+ */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === null || Object.getPrototypeOf(prototype) === null;
+}
+
+/**
+ * Throw `TypeError` unless `value` is a plain record ({@link isPlainObject}).
+ * Use for configuration and weight maps: a `Map` or `Date` there would
+ * otherwise be read as an empty record and silently fall back to defaults.
+ */
+export function checkPlainRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isPlainObject(value)) throw new TypeError(`${label} must be a plain object (got ${show(value)})`);
   return value;
 }
 
@@ -91,6 +149,28 @@ export function checkRecord(value: unknown, label: string): Record<string, unkno
 export function checkArray(value: unknown, label: string): readonly unknown[] {
   if (!Array.isArray(value)) throw new TypeError(`${label} must be an array (got ${show(value)})`);
   return value as readonly unknown[];
+}
+
+/**
+ * Validate `value` is an array and return a DENSE COPY of it, built in one
+ * indexed traversal: `length` is read once, each element is read once, and a
+ * hole (`[a, , c]`, `new Array(3)`) throws `TypeError` naming the index.
+ * Callers then validate and compute from the copy, so an array that changes
+ * (a proxy, a getter, a concurrent mutation) cannot be read two ways, and
+ * `.map`/`.forEach` (which skip holes) and `for...of` (which visits them)
+ * cannot disagree about what was checked.
+ */
+export function snapshotArray(value: unknown, label: string): unknown[] {
+  const source = checkArray(value, label);
+  const length = source.length;
+  const copy: unknown[] = [];
+  for (let index = 0; index < length; index++) {
+    if (!Object.hasOwn(source, index)) {
+      throw new TypeError(`${label}[${index}] is missing (the array has a hole at index ${index})`);
+    }
+    copy.push(source[index]);
+  }
+  return copy;
 }
 
 /** Throw `TypeError` unless `value` is a string. */
@@ -108,38 +188,57 @@ export function hasOwn(object: object, key: PropertyKey): boolean {
 // Config shapes
 // ---------------------------------------------------------------------------
 
-/** Every own value of a weight map must be a finite number >= 0. */
-export function checkWeightMap(map: unknown, label: string): void {
-  const record = checkRecord(map, label);
-  for (const [key, weight] of Object.entries(record)) {
-    checkNumber(weight, `${label}[${JSON.stringify(key)}]`, { min: 0 });
-  }
+/**
+ * Validate a weight map (a plain record whose every own value is a finite
+ * number `>= 0`) and return a fresh copy built from the values it validated.
+ * A key named `__proto__` is kept as an ordinary own key.
+ */
+export function snapshotWeightMap(map: unknown, label: string): Record<string, number> {
+  const record = checkPlainRecord(map, label);
+  return Object.fromEntries(
+    Object.entries(record).map(([key, weight]) => [key, checkNumber(weight, `${label}[${show(key)}]`, { min: 0 })]),
+  );
+}
+
+/**
+ * Shallow-merge an optional override section over `defaults`. `undefined`
+ * (and only `undefined`) means "no override". Any other value must be a plain
+ * record, and is validated BEFORE it is spread, so `false`, `0`, `null`, an
+ * array, a `Date` or a `Map` can never vanish into the defaults.
+ */
+export function mergeSection(defaults: object, override: unknown, label: string): Record<string, unknown> {
+  return override === undefined ? { ...defaults } : { ...defaults, ...checkPlainRecord(override, label) };
 }
 
 /** Throw `TypeError` if `object` has a key outside `allowed` (catches typos like `halflifeDays`). */
 export function rejectUnknownKeys(object: object, allowed: readonly string[], label: string): void {
   for (const key of Object.keys(object)) {
     if (!allowed.includes(key)) {
-      throw new TypeError(`${label}: unknown key ${JSON.stringify(key)} (allowed: ${allowed.join(", ")})`);
+      throw new TypeError(`${label}: unknown key ${show(key)} (allowed: ${allowed.join(", ")})`);
     }
   }
 }
 
 const RECENCY_CURVE_KEYS = ["halfLifeDays", "missingDateAgeDays"] as const;
 
-/** `halfLifeDays >= 0` (`Infinity` means "never decays"), `missingDateAgeDays >= 0`. */
-export function checkRecencyCurve(curve: unknown, label: string): void {
-  const record = checkRecord(curve, label);
+/**
+ * `halfLifeDays >= 0` (`Infinity` means "never decays"), `missingDateAgeDays >= 0`.
+ * Returns a fresh copy of the validated values.
+ */
+export function checkRecencyCurve(curve: unknown, label: string): { halfLifeDays: number; missingDateAgeDays: number } {
+  const record = checkPlainRecord(curve, label);
   rejectUnknownKeys(record, RECENCY_CURVE_KEYS, label);
-  checkNumber(record.halfLifeDays, `${label}.halfLifeDays`, { min: 0, allowInfinity: true });
-  checkNumber(record.missingDateAgeDays, `${label}.missingDateAgeDays`, { min: 0 });
+  return {
+    halfLifeDays: checkNumber(record.halfLifeDays, `${label}.halfLifeDays`, { min: 0, allowInfinity: true }),
+    missingDateAgeDays: checkNumber(record.missingDateAgeDays, `${label}.missingDateAgeDays`, { min: 0 }),
+  };
 }
 
 const THRESHOLDS_KEYS = ["high", "moderate"] as const;
 
 /** `high` and `moderate` are numbers >= 0 (`Infinity` allowed) with `moderate <= high`. */
 export function checkThresholds(thresholds: unknown, label: string): { high: number; moderate: number } {
-  const record = checkRecord(thresholds, label);
+  const record = checkPlainRecord(thresholds, label);
   rejectUnknownKeys(record, THRESHOLDS_KEYS, label);
   const high = checkNumber(record.high, `${label}.high`, { min: 0, allowInfinity: true });
   const moderate = checkNumber(record.moderate, `${label}.moderate`, { min: 0, allowInfinity: true });
@@ -151,9 +250,10 @@ export function checkThresholds(thresholds: unknown, label: string): { high: num
 
 /** Freeze `value` and everything reachable from it. Returns `value`. */
 export function deepFreeze<T>(value: T): T {
-  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+  // Primitives and null already count as frozen, so only a live object recurses.
+  if (!Object.isFrozen(value)) {
     Object.freeze(value);
-    for (const inner of Object.values(value)) deepFreeze(inner);
+    for (const inner of Object.values(value as object)) deepFreeze(inner);
   }
   return value;
 }
@@ -192,7 +292,7 @@ export function checkClock(value: unknown, label: string): string {
 // ---------------------------------------------------------------------------
 
 const ISO_TIMESTAMP =
-  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|[+-]\d{2}:\d{2}))?$/;
+  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(?:Z|([+-])(\d{2}):(\d{2})))?$/;
 
 const MS_PER_MINUTE = 60_000;
 
@@ -230,21 +330,25 @@ export function checkTimestamp(value: unknown, label: string): number {
   const minute = m[5] === undefined ? 0 : Number(m[5]);
   const second = m[6] === undefined ? 0 : Number(m[6]);
   const millis = m[7] === undefined ? 0 : Number(`${m[7]}00`.slice(0, 3));
-  if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) return fail();
+  // Month and day ranges are enforced by the roll-over check below (month 0
+  // or 13 and day 0 or 32 all change the date's month or day).
+  if (hour > 23 || minute > 59 || second > 59) return fail();
 
   let offsetMinutes = 0;
-  const zone = m[8];
-  if (zone !== undefined && zone !== "Z") {
-    const offsetHour = Number(zone.slice(1, 3));
-    const offsetMinute = Number(zone.slice(4, 6));
+  // Groups 8-10 are the sign, hour and minute of a `+HH:MM` offset; all are
+  // undefined for a date-only value or `Z`, which mean UTC.
+  if (m[8] !== undefined) {
+    const offsetHour = Number(m[9]);
+    const offsetMinute = Number(m[10]);
     if (offsetHour > 23 || offsetMinute > 59) return fail();
-    offsetMinutes = (zone.startsWith("-") ? -1 : 1) * (offsetHour * 60 + offsetMinute);
+    offsetMinutes = (m[8] === "-" ? -1 : 1) * (offsetHour * 60 + offsetMinute);
   }
 
   // setUTCFullYear (unlike Date.UTC) does not remap years 0-99 to 1900-1999.
   const date = new Date(0);
   date.setUTCFullYear(year, month - 1, day);
-  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return fail();
+  // A day past the end of the month (or 0) rolls into another month, so the month alone detects it.
+  if (date.getUTCMonth() !== month - 1) return fail();
   date.setUTCHours(hour, minute, second, millis);
   return date.getTime() - offsetMinutes * MS_PER_MINUTE;
 }
@@ -259,13 +363,14 @@ export function checkTimestamp(value: unknown, label: string): number {
  * rounded value of the exact real sum, so it depends only on WHICH numbers are
  * summed, never on their order, and it does not drift as the count grows.
  *
- * Inputs must be finite (callers validate first). Throws `RangeError` if an
- * intermediate value overflows to infinity. An empty list sums to `0`.
+ * Throws `RangeError` if any term is not finite (a lone `Infinity` or `NaN` is
+ * rejected too, not just one that overflows mid-sum) or if an intermediate
+ * value overflows to infinity. An empty list sums to `0`.
  */
 export function exactSum(values: readonly number[]): number {
   const partials: number[] = [];
   for (const value of values) {
-    let x = value;
+    let x = assertFinite(value, "a term being summed");
     let used = 0;
     for (let j = 0; j < partials.length; j++) {
       let y = partials[j] as number;
