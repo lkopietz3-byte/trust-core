@@ -1,25 +1,31 @@
 /**
- * trust-core/anonymous — assess authenticity of UNATTRIBUTED, scraped signals.
+ * trust-core/anonymous — gauge how organic a corpus of UNATTRIBUTED signals looks.
  *
  * Use this when you don't know who's behind a signal: crawled mentions,
  * imported reviews with no verifiable identity, aggregator feeds. There is no
  * reputation to weight and no prior to shrink toward — instead the question
- * is "does this look like real, independent sentiment, or planted buzz?"
+ * is "does the pattern of this corpus look varied and recent, or does it show
+ * a pattern the heuristics discount?" The answer is a heuristic score, not a
+ * finding about any observation, and it does not verify that sources are
+ * independent: `source` is a caller-supplied type label.
+ *
+ * Only ELIGIBLE observations count: a confidence above 0 and a source type
+ * with configured credibility above 0. With none, the result says so
+ * explicitly (`confidence.level === "insufficient"`).
  *
  * The pattern:
- *   - `volume`    — log-scaled count of independent sources (saturating, so
- *                   the 50th source barely matters more than the 12th).
- *   - `diversity` — distinct sources relative to signal count. Eight signals
- *                   from five sources beats eight signals from one.
+ *   - `volume`    — log-scaled count of distinct source types (saturating, so
+ *                   the 50th type barely matters more than the 12th).
+ *   - `diversity` — distinct source types relative to observation count. Eight
+ *                   observations from five types beats eight from one.
  *   - `consensus` — recency- and confidence-weighted mean sentiment, with
  *                   each source type weighted by a caller-supplied
  *                   "localness"/credibility factor.
  *   - `recency`   — how fresh the evidence is, on average.
  *   - `astroturfPenalty` — subtracted from the weighted-positive composite
- *                   when the evidence looks manipulated: concentrated in a
- *                   single source, or suspiciously uniform (near-maximal
- *                   sentiment with near-zero variance — the fingerprint of
- *                   copy-pasted or purchased praise).
+ *                   when the evidence shows a discounted pattern: concentrated
+ *                   in a single source type, or uniform (near-maximal
+ *                   sentiment with near-zero variance).
  *
  * Every weight and threshold is configuration (`AnonymousConfig`), supplied
  * by the caller for their own source taxonomy.
@@ -74,8 +80,9 @@ export interface AnonymousSignal {
   publishedAt?: string | null;
 }
 
+/** How an observation's age lowers its weight: the weight halves every `halfLifeDays`. */
 export interface RecencyCurve {
-  /** Days for the recency weight to halve. */
+  /** Days for the recency weight to halve. `Infinity` means never; `0` means full weight only at age 0. */
   halfLifeDays: number;
   /** Age (in days) assumed for signals with no `publishedAt`. */
   missingDateAgeDays: number;
@@ -89,6 +96,12 @@ export interface AuthenticityWeights {
   recency: number;
 }
 
+/**
+ * Thresholds for the two patterns the heuristics discount (too few source
+ * types, near-uniform near-maximal sentiment). Crossing one lowers the score;
+ * it is not a finding that any observation is fabricated. The name comes from
+ * the library's original purpose and is kept for API stability.
+ */
 export interface AstroturfRules {
   /** Source count at/under which single-source concentration is penalized. */
   concentrationSourceCeiling: number;
@@ -100,20 +113,28 @@ export interface AstroturfRules {
   uniformVarianceThreshold: number;
   /** Penalty applied when both the mean and variance thresholds are crossed. */
   uniformPenalty: number;
-  /** Minimum signal count before astroturf checks apply at all (avoids false positives on tiny n). */
+  /** Minimum ELIGIBLE observation count before the astroturf checks apply at all (avoids false positives on tiny n). */
   minSignalsForUniformCheck: number;
 }
 
+/**
+ * Everything `assessAuthenticity` needs. Build one with
+ * {@link resolveAnonymousConfig}; a hand-built object is accepted too and is
+ * validated in full on every call.
+ */
 export interface AnonymousConfig {
-  /** "Localness"/credibility weight per source type, `[0, 1]`ish. Unknown sources default to 0. */
+  /** "Localness"/credibility weight per source type, each a finite number `>= 0` (about `[0, 1]`). A source type that is unlisted, or listed with 0, makes its observations ineligible: they count for nothing. */
   sourceWeights: Record<string, number>;
   weights: AuthenticityWeights;
   /** How much the astroturf penalty (`[0, 1]`) is subtracted from the positive composite. */
   astroturfWeight: number;
+  /** Age-decay curve. */
   recency: RecencyCurve;
   /** Source count at which the log-scaled volume term saturates to full credit. */
   volumeSaturation: number;
+  /** Thresholds for the two discounted patterns. */
   astroturf: AstroturfRules;
+  /** Cut-offs, in distinct eligible source types, for `high` and `moderate` confidence. */
   confidence: ConfidenceThresholds;
 }
 
@@ -273,6 +294,7 @@ function sourceWeight(config: AnonymousConfig, source: string): number {
 // Authenticity assessment
 // ---------------------------------------------------------------------------
 
+/** The parts of the score, each in `[0, 1]`, so a caller can see why a score is what it is. */
 export interface AuthenticityComponents {
   consensus: number;
   diversity: number;
@@ -282,6 +304,7 @@ export interface AuthenticityComponents {
   astroturfPenalty: number;
 }
 
+/** Which of the two discounted patterns were seen. */
 export interface AstroturfFlags {
   /** True when the eligible evidence comes from too few distinct source types. */
   lowSourceCount: boolean;
@@ -289,6 +312,7 @@ export interface AstroturfFlags {
   uniformSentiment: boolean;
 }
 
+/** The result of {@link assessAuthenticity}. */
 export interface AuthenticityAssessment {
   /**
    * 0-100. When `confidence.level` is `"insufficient"` this is 0 by convention:
@@ -310,6 +334,7 @@ export interface AuthenticityAssessment {
   explanation: string;
 }
 
+/** Options for {@link assessAuthenticity}. */
 export interface AssessAuthenticityOptions {
   /**
    * "Now" recency decay is computed against: a strict ISO 8601 string, or a

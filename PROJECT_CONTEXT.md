@@ -5,7 +5,7 @@ Mapped on **2026-09-26** from connected GitHub, Vercel, and Supabase metadata. T
 ## Identity and repository settings
 
 - Repository: [lkopietz3-byte/trust-core](https://github.com/lkopietz3-byte/trust-core)
-- Purpose: A library that scores caller-supplied signals from identified and anonymous reviewers and flags selected suspicious patterns. Its scores do not verify contributors or establish authenticity.
+- Purpose: A library that weights caller-supplied signals from known contributors and gauges how varied and recent a corpus of unattributed sentiment looks, discounting two patterns (too few source types, near-uniform praise). Its scores are weighted heuristics: they do not verify contributors, sources, or authenticity, and they are not a fraud finding.
 - GitHub visibility: **public**; default branch: **`main`**; archived: **no**.
 - Product stage, owner, production health, and GitHub protection/settings beyond the fields above: **not verified**.
 

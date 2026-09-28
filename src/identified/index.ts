@@ -83,6 +83,7 @@ export interface IdentifiedSignal {
   value: number;
 }
 
+/** How a contributor's 0-100 reputation maps to a weight multiplier: linear from `floor` to `ceil`. */
 export interface ReputationCurve {
   /** Multiplier applied at reputation 0. */
   floor: number;
@@ -92,19 +93,31 @@ export interface ReputationCurve {
   neutral: number;
 }
 
+/** How a signal's age lowers its weight: the multiplier halves every `halfLifeDays`. */
 export interface RecencyCurve {
-  /** Days for the recency multiplier to halve. */
+  /** Days for the recency multiplier to halve. `Infinity` means never; `0` means full weight only at age 0. */
   halfLifeDays: number;
   /** Age (in days) assumed for signals with no `occurredAt`. */
   missingDateAgeDays: number;
 }
 
+/**
+ * Everything `scoreEntity` needs to weight a signal. Build one with
+ * {@link resolveIdentifiedConfig}; a hand-built object is accepted too and is
+ * validated in full on every call.
+ */
 export interface IdentifiedConfig {
+  /** Weight per `signal.tier` key, each a finite number `>= 0`. A weight of 0 makes the signal count for nothing. */
   tierWeights: Record<string, number>;
+  /** Weight per `signal.source` key, each `>= 0`. */
   sourceWeights: Record<string, number>;
+  /** Weight per `signal.proof` key, each `>= 0`. */
   proofWeights: Record<string, number>;
+  /** Multiplier curve for `signal.reputation`. */
   reputation: ReputationCurve;
+  /** Age-decay curve. */
   recency: RecencyCurve;
+  /** Effective-sample-size cut-offs for `high` and `moderate` confidence. */
   confidence: ConfidenceThresholds;
 }
 
@@ -319,20 +332,29 @@ export function signalWeight(signal: IdentifiedSignal, config: IdentifiedConfig,
 // Entity scoring
 // ---------------------------------------------------------------------------
 
+/** One row of the per-signal breakdown in {@link EntityScore.contributions}. */
 export interface SignalContribution {
+  /** The signal's `id`. */
   id: string;
+  /** The signal's `tier` key. */
   tier: string;
+  /** The signal's `source` key. */
   source: string;
+  /** The signal's `proof` key. */
   proof: string;
+  /** The signal's final weight: tier x source x proof x reputation x recency. `0` means it counted for nothing. */
   weight: Weight;
+  /** Age in days at `now`, or `null` when the signal had no `occurredAt`. */
   ageDays: number | null;
 }
 
+/** The result of {@link scoreEntity}. */
 export interface EntityScore {
-  /** Final 0-100 score, shrunk toward `prior` by the dial. */
+  /** Final 0-100 score, shrunk toward `prior` by the dial. Exactly `prior` when no signal carried any weight. */
   score: number;
   /** Unshrunk credibility-weighted mean, or `null` when there is no evidence at all. */
   raw: number | null;
+  /** The baseline the score was shrunk toward, as passed in. */
   prior: number;
   /** Effective sample size — sum of signal weights, not a raw count. */
   nEff: number;
@@ -346,6 +368,7 @@ export interface EntityScore {
   contributions: SignalContribution[];
 }
 
+/** Options for {@link scoreEntity}. */
 export interface ScoreEntityOptions {
   /**
    * "Now" recency decay is computed against: a strict ISO 8601 string, or a
@@ -372,11 +395,31 @@ export interface ScoreEntityOptions {
  * grows. `score` and `raw` are clamped to `[0, 100]` as a final safety net
  * against floating-point overshoot at the boundary.
  *
+ * **Zero-weight signals.** A signal whose weight is 0 (a zero tier, source or
+ * proof weight, or an age that decays it to nothing) adds nothing to `score`,
+ * `raw`, `nEff` or `confidence`; only `signalCount` and its own row in
+ * `contributions` show it was received.
+ *
+ * **No evidence.** When `nEff` is 0 (no signals, or only zero-weight ones):
+ * `confidence.level` is `"insufficient"` with a `reason`, `raw` is `null`, and
+ * `score` is exactly `prior`.
+ *
+ * **Order.** `contributions` is heaviest first; equal weights are ordered by
+ * `id`, `tier`, `source`, `proof`, then age (youngest first, unknown last), so
+ * the whole result is the same for any input order. Duplicate ids are not
+ * rejected; they are ordered by the remaining keys.
+ *
+ * Every field of `signals`, `options` and `config` is read once, and `config`
+ * is validated in full (see {@link resolveIdentifiedConfig}).
+ *
  * @throws TypeError if `options` is missing/not an object, `now` is neither
- *   a valid ISO 8601 timestamp nor a `Date`, or `signals` is not an array.
+ *   a valid ISO 8601 timestamp nor a `Date`, `dial` is neither a number nor a
+ *   preset name, `signals` is not an array or has a hole, an element is not an
+ *   object, or `config` is not a valid config.
  * @throws RangeError if `now` is an Invalid `Date`, `prior` is outside
  *   `[0, 100]`, `dial` is a negative number or an unrecognized preset name,
- *   or any signal fails validation (see {@link signalWeight}).
+ *   any signal fails validation (see {@link signalWeight}), or a derived
+ *   weight, weighted value, sum or shrinkage term overflows or is not finite.
  */
 export function scoreEntity(
   signals: readonly IdentifiedSignal[],

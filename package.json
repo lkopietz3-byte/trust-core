@@ -1,6 +1,6 @@
 {
   "name": "trust-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Deterministic entity-trust scoring: weight known contributors' signals, and gauge how organic anonymous sentiment looks. Zero runtime dependencies.",
   "keywords": [
     "trust",

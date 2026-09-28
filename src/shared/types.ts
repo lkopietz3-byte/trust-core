@@ -18,12 +18,16 @@ import { assertFinite, checkNumber, checkThresholds, checkTimestamp, deepFreeze,
 // Bounding
 // ---------------------------------------------------------------------------
 
-/** Clamp `value` into `[min, max]`. */
+/**
+ * Clamp `value` into `[min, max]`. `NaN` passes through unchanged: the scoring
+ * functions validate and check finiteness before they clamp, so `clamp` never
+ * has to hide a `NaN`.
+ */
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-/** Clamp `value` into `[0, 1]`. The unit interval both modules compute in. */
+/** Clamp `value` into `[0, 1]`, the unit interval both modules compute in. `NaN` passes through unchanged (see {@link clamp}). */
 export function clamp01(value: number): number {
   return clamp(value, 0, 1);
 }
@@ -136,13 +140,32 @@ export function shrinkTowardPrior(
  */
 export type TrustDialPreset = "as_is" | "balanced" | "strict";
 
+/** One named shrinkage preset: a strength plus human-readable text for a UI. */
 export interface TrustDial {
   /** Shrinkage strength, in phantom prior signals. */
   C: number;
+  /** Short display name, such as `"Balanced"`. */
   label: string;
+  /** One sentence describing how hard the preset pulls toward the prior. */
   description: string;
 }
 
+/**
+ * The three named shrinkage presets, keyed by {@link TrustDialPreset}:
+ *
+ * | Preset | `C` | Meaning |
+ * | --- | --- | --- |
+ * | `as_is` | 0.5 | Almost no pull toward the prior. |
+ * | `balanced` | 4 | Pulls thin evidence gently toward the prior. The default of `scoreEntity`. |
+ * | `strict` | 12 | Needs deep, credible evidence before a score stands on its own. |
+ *
+ * `C` is the number of "phantom prior signals" passed to
+ * {@link shrinkTowardPrior}: with `C = 4`, four average-credibility signals
+ * that all said `prior` are mixed in before the real evidence. The object and
+ * every preset in it are deep-frozen. These values are illustrative starting
+ * points, not calibrated for any domain; pass a raw number wherever a dial is
+ * accepted to use your own strength.
+ */
 export const TRUST_DIALS: Record<TrustDialPreset, TrustDial> = deepFreeze({
   as_is: {
     C: 0.5,
@@ -209,6 +232,7 @@ export function resolveDial(dial: TrustDialPreset | number): number {
  */
 export type ConfidenceLevel = "high" | "moderate" | "thin" | "insufficient";
 
+/** Effective-sample-size cut-offs for the confidence levels. */
 export interface ConfidenceThresholds {
   /** Effective sample size at/above which confidence is "high". */
   high: number;
@@ -216,7 +240,9 @@ export interface ConfidenceThresholds {
   moderate: number;
 }
 
+/** A confidence label together with the sample size it was derived from. */
 export interface Confidence {
+  /** How much credible evidence backs the score. */
   level: ConfidenceLevel;
   /** The effective (credibility-weighted) sample size the label was derived from. */
   effectiveSampleSize: number;
