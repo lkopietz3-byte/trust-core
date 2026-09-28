@@ -105,7 +105,8 @@ describe("assessAuthenticity — flags manipulation", () => {
     const plantedResult = assessAuthenticity(planted, config, { now: NOW });
     const genuineResult = assessAuthenticity(genuine, config, { now: NOW });
 
-    expect(plantedResult.trustScore).toBeLessThan(genuineResult.trustScore);
+    expect(genuineResult.trustScore).not.toBeNull();
+    expect(plantedResult.trustScore).toBeLessThan(genuineResult.trustScore as number);
   });
 });
 
@@ -330,7 +331,8 @@ describe("resolveAnonymousConfig — configuration validation", () => {
     const signals = [sig("forum", 0.6), sig("marketplace", 0.5)];
     const halfResult = assessAuthenticity(signals, half, { now: NOW });
     const fullResult = assessAuthenticity(signals, full, { now: NOW });
-    expect(halfResult.trustScore).toBeLessThan(fullResult.trustScore);
+    expect(fullResult.trustScore).not.toBeNull();
+    expect(halfResult.trustScore).toBeLessThan(fullResult.trustScore as number);
   });
 });
 
@@ -371,11 +373,15 @@ describe("property: authenticity invariants over randomized inputs (seeded)", ()
     });
   }
 
-  it("trustScore always stays within the documented [0, 100] range", () => {
+  it("trustScore is null exactly when evidence is insufficient, otherwise an integer in [0, 100]", () => {
     for (let trial = 0; trial < 200; trial++) {
       const n = Math.floor(rand() * 15);
       const signals = Array.from({ length: n }, randomSignal);
       const result = assessAuthenticity(signals, config, { now: NOW });
+      if (result.confidence.level === "insufficient") {
+        expect(result.trustScore).toBeNull();
+        continue;
+      }
       expect(result.trustScore).toBeGreaterThanOrEqual(0);
       expect(result.trustScore).toBeLessThanOrEqual(100);
       expect(Number.isInteger(result.trustScore)).toBe(true);
@@ -415,13 +421,12 @@ describe("property: authenticity invariants over randomized inputs (seeded)", ()
     }
   });
 
-  it("handles empty signals with a defined score and no crash", () => {
+  it("handles empty signals without crashing and reports no score", () => {
     const result = assessAuthenticity([], config, { now: NOW });
     expect(result.sourceCount).toBe(0);
     expect(result.signalCount).toBe(0);
-    expect(Number.isFinite(result.trustScore)).toBe(true);
-    expect(result.trustScore).toBeGreaterThanOrEqual(0);
-    expect(result.trustScore).toBeLessThanOrEqual(100);
+    expect(result.trustScore).toBeNull();
+    expect(result.confidence.level).toBe("insufficient");
   });
 
   it("stays numerically well-behaved with a large number of signals (no NaN/Infinity)", () => {

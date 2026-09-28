@@ -315,11 +315,11 @@ export interface AstroturfFlags {
 /** The result of {@link assessAuthenticity}. */
 export interface AuthenticityAssessment {
   /**
-   * 0-100. When `confidence.level` is `"insufficient"` this is 0 by convention:
-   * it means "no usable evidence", not "measured as untrustworthy". Check the
-   * confidence level before reading the score.
+   * 0-100, or `null` when `confidence.level` is `"insufficient"`: with no
+   * usable evidence there is no score. A number here is never a stand-in for
+   * missing data, so it can be sorted and compared without a special case.
    */
-  trustScore: number;
+  trustScore: number | null;
   components: AuthenticityComponents;
   /** Distinct source types among ELIGIBLE observations. The source strings are caller-supplied labels; nothing verifies they are independent publishers. */
   sourceCount: number;
@@ -385,8 +385,8 @@ const INSUFFICIENT_REASON =
  * ineligible.
  *
  * **No eligible evidence.** The result is explicit: `confidence.level` is
- * `"insufficient"` (with a `reason`), `trustScore` is `0` by convention (not
- * a measurement), every component is `0`, both flags are `false`, and
+ * `"insufficient"` (with a `reason`), `trustScore` is `null` (no score, not a
+ * low score), every component is `0`, both flags are `false`, and
  * `explanation` says there is no usable evidence.
  *
  * Every accumulator (consensus, recency, and the astroturf mean/variance) is
@@ -488,14 +488,14 @@ function insufficientAssessment(submitted: number, config: AnonymousConfig): Aut
   const confidence = confidenceFromSampleSize(0, config.confidence);
   confidence.reason = INSUFFICIENT_REASON;
   return {
-    trustScore: 0,
+    trustScore: null,
     components: { consensus: 0, diversity: 0, volume: 0, recency: 0, astroturfPenalty: 0 },
     sourceCount: 0,
     signalCount: submitted,
     eligibleSignalCount: 0,
     flags: { lowSourceCount: false, uniformSentiment: false },
     confidence,
-    explanation: `Insufficient evidence: ${INSUFFICIENT_REASON}, so no score is supported (0 is reported by convention).`,
+    explanation: `Insufficient evidence: ${INSUFFICIENT_REASON}, so no score is reported.`,
   };
 }
 

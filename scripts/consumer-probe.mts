@@ -75,7 +75,9 @@ const viaNamespace: EntityScore = identified.scoreEntity([idSignal], idConfig, {
 const viaNamespaceAnon: AuthenticityAssessment = anonymous.assessAuthenticity([anonSignal], anonConfig, {
   now: "2026-08-01T00:00:00Z",
 });
-if (viaNamespace.score < 0 || viaNamespaceAnon.trustScore < 0) throw new Error("scores should be non-negative");
+// trustScore is `number | null`: a consumer must handle "no score" before comparing.
+const anonScore: number | null = viaNamespaceAnon.trustScore;
+if (viaNamespace.score < 0 || (anonScore !== null && anonScore < 0)) throw new Error("scores should be non-negative");
 
 // The insufficient-evidence outcome is part of the public types.
 const level: Confidence["level"] = anonResult.confidence.level;

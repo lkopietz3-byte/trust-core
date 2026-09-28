@@ -41,7 +41,7 @@ are labeled TC-nnn (the external audit) or by bug class (the internal sweep).
   `"insufficient"`, and `Confidence` gains an optional `reason`. `confidenceFromSampleSize(0, ...)`
   returns it whatever the thresholds are (a zero threshold used to give `high`). In `identified`,
   `raw` is `null` and `score` is exactly `prior` (it used to differ in the last bit for some dials).
-  In `anonymous`, `trustScore` is `0` by convention, every component is `0`, both flags are `false`.
+  In `anonymous`, `trustScore` is `null` (its type is now `number | null`), every component is `0`, both flags are `false`. A score of `0` would have read as "least trustworthy" and sorted an entity with no evidence below one that looks planted.
 - **Explanations describe patterns only (TC-004).** Changed strings in
   `assessAuthenticity().explanation`:
   - `Trust 83/100 across 3 independent sources.` is now
@@ -56,7 +56,7 @@ are labeled TC-nnn (the external audit) or by bug class (the internal sweep).
     `Sentiment is unusually uniform, which lowers the score. This is a pattern in the numbers, not a finding about the observations.`
   - `Backed by very few independent sources; discounted.` is now
     `Evidence comes from very few distinct source types, which lowers the score.`
-  - New: `Insufficient evidence: no observation has both a confidence above 0 and a source type with credibility above 0, so no score is supported (0 is reported by convention).`
+  - New: `Insufficient evidence: no observation has both a confidence above 0 and a source type with credibility above 0, so no score is reported.`
   - Unchanged: `Sentiment is strongly positive.` and `Sentiment is lukewarm or negative.`
 - **A `dial` must be a preset name or a number.** An array, a `String` object, or `null` used
   to be coerced into a preset name or defaulted; it is now a `TypeError`.

@@ -181,13 +181,13 @@ const ignored = anonymous.assessAuthenticity(
   { now: "2026-08-01T00:00:00Z" },
 );
 ignored.confidence;          // { level: "insufficient", effectiveSampleSize: 0, reason: "no observation has both a confidence above 0 and a source type with credibility above 0" }
-ignored.trustScore;          // 0 — by convention, meaning "no usable evidence", not "measured as untrustworthy"
+ignored.trustScore;          // null — no usable evidence, so no score (not a low score)
 ignored.eligibleSignalCount; // 0
 ignored.signalCount;         // 1
-ignored.explanation;         // "Insufficient evidence: no observation has both ... so no score is supported (0 is reported by convention)."
+ignored.explanation;         // "Insufficient evidence: no observation has both ... so no score is reported."
 ```
 
-Check `confidence.level === "insufficient"` before you show `trustScore`.
+`trustScore` is `null` exactly when `confidence.level` is `"insufficient"`, so handle `null` wherever you show or sort it.
 
 The astroturf penalty fires on either of two conditions, and either is enough to discount the score:
 
@@ -253,7 +253,7 @@ Error messages that quote a caller's string (a tier name, a config key) escape c
 - **These are weighted heuristics over the signals you supply, not a measure of truthfulness.** Neither module checks whether any underlying claim, review, or event is actually true — `identified` reflects how much credible, recent, well-sourced *evidence* exists for a score, and `anonymous` reflects how *organic* a pattern of sentiment looks, not whether any individual opinion in it is honest or accurate. A perfectly genuine reviewer can be wrong; a perfectly organic-looking astroturf campaign (see below) can pass.
 - **Per-signal and per-corpus only, not cross-signal.** `identified` reputation-weights one contributor at a time; `anonymous` looks for statistical anomalies within one entity's corpus. Neither module correlates behavior *across* entities or contributors — a ring of accounts that each post one plausible, well-spaced, moderately-worded review across many different entities will not be caught here. That's a graph/network-analysis problem, not a per-signal or per-corpus scoring problem, and it's out of scope for this library.
 - **Labels are not identities.** `source` is a string you assign, and `sourceCount` counts distinct labels. Nothing here checks that two labels are two independent publishers, or that one label is not many accounts. The result says "independence not verified" for that reason.
-- **A number is not a finding.** `trustScore` and the explanation describe a pattern in the numbers you supplied. A `trustScore` of `0` with `confidence.level` of `"insufficient"` means there was no usable evidence, not that anything was measured as untrustworthy.
+- **A number is not a finding.** `trustScore` and the explanation describe a pattern in the numbers you supplied. With no usable evidence, `trustScore` is `null` rather than a number, so an entity nobody has said anything useful about is never ranked as if it had been measured as untrustworthy.
 - **The astroturf checks are heuristics, not a detector.** They catch two cheap, common failure modes — evidence concentrated in too few sources, and near-identical near-maximal praise with almost no variance — and nothing else. What they *can* show: this particular corpus looks statistically unusual in one of those two specific ways. What they *cannot* show: that the sentiment is fabricated, that any reviewer is fake, or that a campaign which varies its wording and sentiment (say, keeping values in a plausible 0.5–0.9 range with real-looking spread across several throwaway "sources") isn't there. Authenticity assessment here is a discount applied to a score, not a fraud finding.
 - **`identified` trusts its inputs' identity claims.** It assumes `tier`, `source`, `proof`, and `reputation` are already honestly computed upstream (e.g. by your own account/verification system) — this library weights them, it doesn't verify them.
 - **Priors and configuration are on you.** Both modules require the caller to supply a sensible domain baseline (`prior`) and weight configuration; a bad prior or miscalibrated weights will produce a confidently wrong score just as fast as a well-calibrated one produces a confidently right one. Validation catches malformed configuration (wrong type, out of range, NaN/Infinity) — it cannot catch a config that is well-formed but wrong for your domain.

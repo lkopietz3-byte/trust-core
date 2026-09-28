@@ -90,6 +90,10 @@ const anonResult = anonymous.assessAuthenticity(anonSignals, anonConfig, { now: 
 assert.equal(typeof anonResult.trustScore, "number");
 assert.ok(Number.isInteger(anonResult.trustScore) && anonResult.trustScore >= 0 && anonResult.trustScore <= 100);
 assert.equal(anonResult.sourceCount, 2);
+// No eligible evidence: no score at all, rather than a misleading 0.
+const noAnonEvidence = anonymous.assessAuthenticity([], anonConfig, { now: "2026-08-01T00:00:00Z" });
+assert.equal(noAnonEvidence.trustScore, null);
+assert.equal(noAnonEvidence.confidence.level, "insufficient");
 assert.equal(typeof anonResult.explanation, "string");
 
 // Validation: out-of-range sentiment must throw.
@@ -109,6 +113,7 @@ const ignored = anonymous.assessAuthenticity(
   { now: "2026-08-01T00:00:00Z" },
 );
 assert.equal(ignored.confidence.level, "insufficient");
+assert.equal(ignored.trustScore, null);
 assert.equal(ignored.eligibleSignalCount, 0);
 assert.equal(ignored.signalCount, 2);
 assert.equal(ignored.sourceCount, 0);

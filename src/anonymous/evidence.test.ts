@@ -36,11 +36,13 @@ const assess = (signals: AnonymousSignal[], cfg: AnonymousConfig = config): Auth
   assessAuthenticity(signals, cfg, { now: NOW });
 
 const INSUFFICIENT_TEXT =
-  "Insufficient evidence: no observation has both a confidence above 0 and a source type with credibility above 0, so no score is supported (0 is reported by convention).";
+  "Insufficient evidence: no observation has both a confidence above 0 and a source type with credibility above 0, so no score is reported.";
 
 describe("no eligible evidence is an explicit 'insufficient' result (TC-003)", () => {
   const expected = (signalCount: number) => ({
-    trustScore: 0,
+    // null, not 0: 0 would read as "measured as least trustworthy" and sort
+    // an entity with no evidence below one that looks planted.
+    trustScore: null,
     components: { consensus: 0, diversity: 0, volume: 0, recency: 0, astroturfPenalty: 0 },
     sourceCount: 0,
     signalCount,
