@@ -64,10 +64,12 @@
     "lint": "eslint . --max-warnings=0",
     "audit:dependencies": "npm audit --package-lock-only --include=dev --ignore-scripts --audit-level=low",
     "verify:package": "node scripts/verify-package.mjs",
+    "attw": "attw --pack . --ignore-rules cjs-resolves-to-esm --profile node16",
     "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run verify:package",
     "prepublishOnly": "npm run verify"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
     "@eslint/js": "10.0.1",
     "eslint": "10.9.1",
     "globals": "17.12.0",
