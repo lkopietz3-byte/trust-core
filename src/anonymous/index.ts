@@ -9,9 +9,9 @@
  * finding about any observation, and it does not verify that sources are
  * independent: `source` is a caller-supplied type label.
  *
- * Only ELIGIBLE observations count: a confidence above 0 and a source type
- * with configured credibility above 0. With none, the result says so
- * explicitly (`confidence.level === "insufficient"`).
+ * Only ELIGIBLE observations count: an observation whose effective weight
+ * (source credibility x confidence x recency decay) is above 0. With none, the
+ * result says so explicitly (`confidence.level === "insufficient"`).
  *
  * The pattern:
  *   - `volume`    — log-scaled count of distinct source types (saturating, so
@@ -325,7 +325,7 @@ export interface AuthenticityAssessment {
   sourceCount: number;
   /** How many observations were submitted (including ineligible ones). */
   signalCount: number;
-  /** How many observations were eligible: confidence above 0 AND a source type with credibility above 0. Only these contribute to any other field. */
+  /** How many observations were eligible: an effective weight above 0 (credibility x confidence x recency decay). Only these contribute to any other field. */
   eligibleSignalCount: number;
   flags: AstroturfFlags;
   /** `effectiveSampleSize` is `sourceCount`. `level` is `"insufficient"` (with a `reason`) when no observation is eligible. */
@@ -368,21 +368,23 @@ function snapshotSignal(raw: unknown, label: string): Observation {
 type Observation = Omit<AnonymousSignal, "id">;
 
 const INSUFFICIENT_REASON =
-  "no observation has both a confidence above 0 and a source type with credibility above 0";
+  "no observation has a positive effective weight (confidence, source credibility and recency decay must all be above 0)";
 
 /**
  * Assess how authentic a corpus of unattributed signals looks: a positive
  * composite of consensus/diversity/volume/recency, minus a penalty when the
  * evidence shows a pattern the heuristics discount.
  *
- * **Eligible evidence.** Only an observation with a `confidence` above 0 AND a
- * source type whose configured credibility is above 0 is eligible. Ineligible
- * observations (zero confidence, an unclassified source type, a source type
- * configured with credibility 0) are still validated, but they contribute
- * nothing to the score, the components, the flags, `sourceCount`, or
- * `confidence`: removing them or adding more of them changes no output except
- * `signalCount`. An observation's age lowers its weight; it does not make it
- * ineligible.
+ * **Eligible evidence.** An observation is eligible only if its final
+ * effective weight, source credibility x `confidence` x recency decay, is
+ * above 0. Ineligible observations (zero confidence, an unclassified source
+ * type, a source type configured with credibility 0, or an age that has
+ * decayed the weight to exactly 0, such as `halfLifeDays: 0` or a date so old
+ * the weight underflows) are still validated, but they contribute nothing to
+ * the score, the components, the flags, `sourceCount`, or `confidence`:
+ * removing them or adding more of them changes no output except `signalCount`.
+ * An age that only lowers the weight (still above 0) does not make an
+ * observation ineligible.
  *
  * **No eligible evidence.** The result is explicit: `confidence.level` is
  * `"insufficient"` (with a `reason`), `trustScore` is `null` (no score, not a
@@ -414,7 +416,25 @@ export function assessAuthenticity(
   const resolved = readConfig(config);
   const observations = list.map((raw, index) => snapshotSignal(raw, `signals[${index}]`));
 
-  const eligible = observations.filter((s) => s.confidence > 0 && sourceWeight(resolved, s.source) > 0);
+  // An observation is eligible only if its FINAL effective weight (source
+  // credibility x confidence x recency decay) is above 0. One that has decayed
+  // to nothing (halfLifeDays 0, or a date so old the weight underflows) carries
+  // no evidence, so it must not raise sourceCount, diversity or confidence.
+  const eligible: Observation[] = [];
+  const weights: number[] = [];
+  const decays: number[] = [];
+  for (const s of observations) {
+    const credibility = sourceWeight(resolved, s.source);
+    if (!(s.confidence > 0 && credibility > 0)) continue;
+    const age = s.publishedAt ? Math.max(0, daysBetween(s.publishedAt, now)) : resolved.recency.missingDateAgeDays;
+    const decay = recencyDecay(age, resolved.recency.halfLifeDays);
+    const w = assertFinite(credibility * s.confidence * decay, "observation weight");
+    if (w > 0) {
+      eligible.push(s);
+      weights.push(w);
+      decays.push(decay);
+    }
+  }
   if (eligible.length === 0) return insufficientAssessment(observations.length, resolved);
 
   const sources = new Set<string>();
@@ -431,23 +451,13 @@ export function assessAuthenticity(
 
   // Consensus: recency- and confidence-weighted mean sentiment, weighted by
   // each source type's configured credibility.
-  const consensusTerms: number[] = [];
-  const consensusWeights: number[] = [];
-  const recencyTerms: number[] = [];
-  const confidences: number[] = [];
-  for (const s of eligible) {
-    const age = s.publishedAt ? Math.max(0, daysBetween(s.publishedAt, now)) : resolved.recency.missingDateAgeDays;
-    const decay = recencyDecay(age, resolved.recency.halfLifeDays);
-    const w = sourceWeight(resolved, s.source) * s.confidence * decay;
-    consensusTerms.push(s.sentiment * w);
-    consensusWeights.push(w);
-    recencyTerms.push(decay * s.confidence);
-    confidences.push(s.confidence);
-  }
+  const consensusTerms = eligible.map((s, i) => s.sentiment * (weights[i] as number));
+  const recencyTerms = eligible.map((s, i) => (decays[i] as number) * s.confidence);
+  const confidences = eligible.map((s) => s.confidence);
   const consensusNum = exactSum(consensusTerms);
-  const consensusDen = exactSum(consensusWeights);
-  const meanSentiment = consensusDen > 0 ? consensusNum / consensusDen : 0;
-  const consensus = clamp01((meanSentiment + 1) / 2);
+  // Every eligible weight is above 0, so this denominator is positive.
+  const consensusDen = exactSum(weights);
+  const consensus = clamp01((consensusNum / consensusDen + 1) / 2);
   // Every eligible confidence is above 0, so this denominator is positive.
   const recency = clamp01(exactSum(recencyTerms) / exactSum(confidences));
 
