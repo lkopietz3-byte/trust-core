@@ -157,15 +157,17 @@ describe("explanation thresholds at their exact boundaries", () => {
   });
 
   it("the recency sentence needs recency strictly below 0.4", () => {
-    const instant = withConfig({ recency: { halfLifeDays: 0, missingDateAgeDays: 0 } });
-    const fresh = (): AnonymousSignal => sig("a", 0.1, { publishedAt: NOW });
-    const stale = (source: string): AnonymousSignal => sig(source, 0.1, { publishedAt: "2020-01-01" });
-    const atBoundary = [fresh(), fresh(), stale("b"), stale("c"), stale("d")];
-    expect(assess(atBoundary, instant).components.recency).toBe(0.4);
-    expect(text(atBoundary, instant)).not.toContain("Recency is low");
-    const below = [fresh(), stale("b"), stale("c"), stale("d"), stale("e")];
-    expect(assess(below, instant).components.recency).toBe(0.2);
-    expect(text(below, instant)).toContain("Recency is low given the publication dates supplied");
+    // Half-life 1 day: age 0 has decay 1, age 2 days 0.25, age 4 days 0.0625 (all exact in binary).
+    const config = withConfig({ recency: { halfLifeDays: 1, missingDateAgeDays: 0 } });
+    const fresh = sig("a", 0.1, { publishedAt: NOW });
+    const aged = (publishedAt: string): AnonymousSignal[] =>
+      ["b", "c", "d", "e"].map((source) => sig(source, 0.1, { publishedAt }));
+    const atBoundary = [fresh, ...aged("2026-07-30T00:00:00Z")];
+    expect(assess(atBoundary, config).components.recency).toBe(0.4);
+    expect(text(atBoundary, config)).not.toContain("Recency is low");
+    const below = [fresh, ...aged("2026-07-28T00:00:00Z")];
+    expect(assess(below, config).components.recency).toBe(0.25);
+    expect(text(below, config)).toContain("Recency is low given the publication dates supplied");
   });
 
   it("a mix of dated and undated evidence uses the 'dates supplied' sentence, not the 'no dates' one", () => {
@@ -189,10 +191,13 @@ describe("explanation thresholds at their exact boundaries", () => {
 });
 
 describe("recency and consensus edge cases", () => {
-  it("when every eligible observation has zero recency weight, consensus is the neutral 0.5 and recency is 0", () => {
+  it("when every observation has decayed to zero weight none is eligible: no score, and consensus is 0, not the neutral 0.5", () => {
     const instant = withConfig({ recency: { halfLifeDays: 0, missingDateAgeDays: 0 } });
     const result = assess([sig("a", 1, { publishedAt: "2020-01-01" })], instant);
-    expect(result.components.consensus).toBe(0.5);
+    expect(result.trustScore).toBeNull();
+    expect(result.confidence.level).toBe("insufficient");
+    expect(result.eligibleSignalCount).toBe(0);
+    expect(result.components.consensus).toBe(0);
     expect(result.components.recency).toBe(0);
   });
 

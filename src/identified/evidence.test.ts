@@ -255,3 +255,35 @@ describe("equal-weight contributions have a stable order (TC-006)", () => {
     ]);
   });
 });
+
+describe("a fully decayed signal carries no weight (same rule as anonymous eligibility)", () => {
+  const instant = resolveIdentifiedConfig({ ...UNIT, recency: { halfLifeDays: 0, missingDateAgeDays: 0 } });
+  const slow = resolveIdentifiedConfig({ ...UNIT, recency: { halfLifeDays: 7, missingDateAgeDays: 0 } });
+
+  it("only fully decayed signals: insufficient evidence, raw null, score exactly the prior", () => {
+    for (const [cfg, occurredAt] of [
+      [instant, "2026-07-31"],
+      [slow, "0001-01-01"],
+    ] as const) {
+      const result = scoreEntity([unit("on", 0, { occurredAt }), unit("on", 100, { occurredAt })], cfg, { now: NOW, prior: 42 });
+      expect(result.confidence.level).toBe("insufficient");
+      expect(result.raw).toBeNull();
+      expect(result.score).toBe(42);
+      expect(result.nEff).toBe(0);
+      expect(result.eligibleSignalCount).toBe(0);
+      expect(result.signalCount).toBe(2);
+    }
+  });
+
+  it("a fully decayed signal beside a live one changes nothing except the submitted count and its own row", () => {
+    const live = unit("on", 80, { occurredAt: NOW });
+    const before = scoreEntity([live], instant, { now: NOW, prior: 50 });
+    const after = scoreEntity([live, unit("on", 0, { occurredAt: "2026-07-31" })], instant, { now: NOW, prior: 50 });
+    expect(after.score).toBe(before.score);
+    expect(after.raw).toBe(before.raw);
+    expect(after.nEff).toBe(before.nEff);
+    expect(after.confidence).toEqual(before.confidence);
+    expect(after.eligibleSignalCount).toBe(1);
+    expect(after.signalCount).toBe(2);
+  });
+});

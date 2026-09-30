@@ -35,8 +35,9 @@ function sig(source: string, sentiment: number, overrides: Partial<AnonymousSign
 const assess = (signals: AnonymousSignal[], cfg: AnonymousConfig = config): AuthenticityAssessment =>
   assessAuthenticity(signals, cfg, { now: NOW });
 
-const INSUFFICIENT_TEXT =
-  "Insufficient evidence: no observation has both a confidence above 0 and a source type with credibility above 0, so no score is reported.";
+const INSUFFICIENT_REASON =
+  "no observation has a positive effective weight (confidence, source credibility and recency decay must all be above 0)";
+const INSUFFICIENT_TEXT = `Insufficient evidence: ${INSUFFICIENT_REASON}, so no score is reported.`;
 
 describe("no eligible evidence is an explicit 'insufficient' result (TC-003)", () => {
   const expected = (signalCount: number) => ({
@@ -51,7 +52,7 @@ describe("no eligible evidence is an explicit 'insufficient' result (TC-003)", (
     confidence: {
       level: "insufficient",
       effectiveSampleSize: 0,
-      reason: "no observation has both a confidence above 0 and a source type with credibility above 0",
+      reason: INSUFFICIENT_REASON,
     },
     explanation: INSUFFICIENT_TEXT,
   });
@@ -143,16 +144,6 @@ describe("ineligible observations are ignored by every component", () => {
     const base = [sig("forum", 0.4), sig("blog", 0.2)];
     const padded = [...base, sig("unknown", 0.4, { confidence: 1, publishedAt: "2000-01-01" })];
     expect(assess(padded).components.recency).toBe(assess(base).components.recency);
-  });
-
-  it("eligible observations whose recency weight is 0 still count as evidence (age lowers weight, it does not erase the observation)", () => {
-    const instant = resolveAnonymousConfig({ ...config, recency: { halfLifeDays: 0, missingDateAgeDays: 0 } });
-    const stale = [sig("forum", 0.9, { publishedAt: "2020-01-01" }), sig("blog", 0.9, { publishedAt: "2020-01-01" })];
-    const result = assess(stale, instant);
-    expect(result.confidence.level).toBe("moderate");
-    expect(result.eligibleSignalCount).toBe(2);
-    expect(result.components.consensus).toBe(0.5);
-    expect(result.components.recency).toBe(0);
   });
 });
 
@@ -298,5 +289,133 @@ describe("explanations describe patterns and uncertainty only (TC-004)", () => {
       );
       expect(assess(signals).explanation).not.toMatch(BANNED);
     }
+  });
+});
+
+describe("a fully decayed observation is not eligible (effective weight decides)", () => {
+  const SOURCES = ["forum", "blog", "marketplace", "aggregator"] as const;
+  const ANCIENT = "0001-01-01";
+  const instant = resolveAnonymousConfig({ ...config, recency: { halfLifeDays: 0, missingDateAgeDays: 540 } });
+  const slow = resolveAnonymousConfig({ ...config, recency: { halfLifeDays: 7, missingDateAgeDays: 540 } });
+  const dayOld = "2026-07-31";
+
+  it("halfLifeDays 0 with dated evidence is insufficient, not a neutral score from 'eligible' zero-weight rows", () => {
+    const negatives = SOURCES.map((source) => sig(source, -1, { confidence: 1, publishedAt: dayOld }));
+    const result = assess(negatives, instant);
+    expect(result.trustScore).toBeNull();
+    expect(result.confidence).toEqual({ level: "insufficient", effectiveSampleSize: 0, reason: INSUFFICIENT_REASON });
+    expect(result.sourceCount).toBe(0);
+    expect(result.eligibleSignalCount).toBe(0);
+    expect(result.signalCount).toBe(4);
+    expect(result.explanation).toBe(`Insufficient evidence: ${INSUFFICIENT_REASON}, so no score is reported.`);
+  });
+
+  it("decades-old evidence whose weight underflows to exactly 0 is insufficient", () => {
+    for (const publishedAt of ["2001-01-01", ANCIENT]) {
+      const result = assess(SOURCES.map((source) => sig(source, -1, { confidence: 1, publishedAt })), slow);
+      expect(result.trustScore).toBeNull();
+      expect(result.confidence.level).toBe("insufficient");
+      expect(result.eligibleSignalCount).toBe(0);
+    }
+  });
+
+  it("an all-negative and an all-positive corpus of fully decayed evidence are the same 'insufficient' result, so neither outranks the other", () => {
+    const build = (sentiment: number) => SOURCES.map((source) => sig(source, sentiment, { confidence: 1, publishedAt: ANCIENT }));
+    const negative = assess(build(-1), slow);
+    const positive = assess(build(1), slow);
+    expect(negative).toEqual(positive);
+    expect(negative.trustScore).toBeNull();
+  });
+
+  it("a live observation keeps counting when a fully decayed one sits beside it", () => {
+    const live = sig("forum", 0.5, { confidence: 1, publishedAt: NOW });
+    const dead = sig("blog", -1, { confidence: 1, publishedAt: dayOld });
+    const result = assess([live, dead], instant);
+    expect(result.eligibleSignalCount).toBe(1);
+    expect(result.sourceCount).toBe(1);
+    expect(result.signalCount).toBe(2);
+    expect(result.confidence.effectiveSampleSize).toBe(1);
+    expect(result.components.consensus).toBe(0.75);
+    expect(result.components.recency).toBe(1);
+  });
+
+  it("the boundary: an observation at age 0 has weight and counts; one day older with halfLifeDays 0 does not", () => {
+    expect(assess([sig("forum", 0.5, { confidence: 1, publishedAt: NOW })], instant).eligibleSignalCount).toBe(1);
+    expect(assess([sig("forum", 0.5, { confidence: 1, publishedAt: dayOld })], instant).eligibleSignalCount).toBe(0);
+  });
+
+  it("an undated observation decayed to 0 by missingDateAgeDays is ineligible too", () => {
+    const undatedStale = resolveAnonymousConfig({ ...config, recency: { halfLifeDays: 0, missingDateAgeDays: 1 } });
+    expect(assess([sig("forum", 0.5, { publishedAt: null })], undatedStale).trustScore).toBeNull();
+  });
+
+  describe("properties (seeded)", () => {
+    const rand = mulberry32(20260930);
+    const pick = <T>(items: readonly T[]): T => items[Math.floor(rand() * items.length)] as T;
+    const recencyOptions = [
+      { halfLifeDays: 30, missingDateAgeDays: 400 },
+      { halfLifeDays: 7, missingDateAgeDays: 540 },
+      { halfLifeDays: 0, missingDateAgeDays: 540 },
+      { halfLifeDays: Infinity, missingDateAgeDays: 0 },
+    ];
+    const randomAge = (): string | null => {
+      const r = rand();
+      if (r < 0.15) return null;
+      if (r < 0.3) return ANCIENT;
+      if (r < 0.45) return "2001-01-01";
+      return `2026-0${1 + Math.floor(rand() * 7)}-${10 + Math.floor(rand() * 18)}T00:00:00Z`;
+    };
+    const randomSignal = (): AnonymousSignal =>
+      sig(pick(SOURCES), 0.05 + rand() * 0.95, { confidence: 0.05 + rand() * 0.95, publishedAt: randomAge() });
+
+    it("adding a fully decayed observation, anywhere, changes no output except the submitted count", () => {
+      for (let trial = 0; trial < 300; trial++) {
+        const cfg = resolveAnonymousConfig({ ...config, recency: pick(recencyOptions) });
+        // Decayed to exactly 0: ancient under any finite half-life, or one day old under halfLifeDays 0.
+        const decayed = (): AnonymousSignal => {
+          const base = sig(pick(SOURCES), rand() * 2 - 1, { confidence: 0.05 + rand() * 0.95 });
+          if (cfg.recency.halfLifeDays === Infinity) return { ...base, confidence: 0 };
+          return { ...base, publishedAt: cfg.recency.halfLifeDays === 0 ? dayOld : ANCIENT };
+        };
+        const base = Array.from({ length: Math.floor(rand() * 8) }, randomSignal);
+        const extra = Array.from({ length: 1 + Math.floor(rand() * 4) }, decayed);
+        const merged = [...base];
+        for (const signal of extra) merged.splice(Math.floor(rand() * (merged.length + 1)), 0, signal);
+        const before = assess(base, cfg);
+        const after = assess(merged, cfg);
+        expect(after).toEqual({ ...before, signalCount: before.signalCount + extra.length });
+      }
+    });
+
+    it("an all-negative corpus never outranks the all-positive one even when every observation is fully decayed and near-uniform", () => {
+      for (let trial = 0; trial < 300; trial++) {
+        const cfg = resolveAnonymousConfig({ ...config, recency: pick(recencyOptions.filter((r) => r.halfLifeDays !== Infinity)) });
+        const when = cfg.recency.halfLifeDays === 0 ? dayOld : ANCIENT;
+        const positive = Array.from({ length: 3 + Math.floor(rand() * 4) }, () =>
+          sig(pick(SOURCES), 0.9 + rand() * 0.1, { confidence: 0.5 + rand() * 0.5, publishedAt: when }),
+        );
+        const negative = positive.map((s) => ({ ...s, sentiment: -s.sentiment }));
+        const up = assess(positive, cfg);
+        const down = assess(negative, cfg);
+        expect(down).toEqual(up);
+        expect(up.trustScore).toBeNull();
+      }
+    });
+
+    it("an all-negative corpus never outranks the same corpus made all-positive", () => {
+      for (let trial = 0; trial < 300; trial++) {
+        const cfg = resolveAnonymousConfig({ ...config, recency: pick(recencyOptions) });
+        const positive = Array.from({ length: Math.floor(rand() * 9) }, randomSignal);
+        const negative = positive.map((s) => ({ ...s, sentiment: -s.sentiment }));
+        const up = assess(positive, cfg);
+        const down = assess(negative, cfg);
+        // Eligibility depends on weight only, so both are scored or neither is.
+        expect(up.trustScore === null).toBe(down.trustScore === null);
+        expect(up.eligibleSignalCount).toBe(down.eligibleSignalCount);
+        if (up.trustScore !== null && down.trustScore !== null) {
+          expect(down.trustScore).toBeLessThanOrEqual(up.trustScore);
+        }
+      }
+    });
   });
 });

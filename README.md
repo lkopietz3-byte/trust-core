@@ -165,12 +165,12 @@ verdict.flags;         // { lowSourceCount: false, uniformSentiment: false }
 verdict.confidence;   // { level: "moderate", effectiveSampleSize: 3 } — 3 distinct source types
 verdict.explanation;  // "Heuristic score 83/100 from 3 distinct source types (independence not verified). Sentiment is strongly positive."
 verdict.signalCount;  // 3 — observations submitted
-verdict.eligibleSignalCount; // 3 — observations that counted (confidence above 0 and a source type with credibility above 0)
+verdict.eligibleSignalCount; // 3 — observations that counted (effective weight above 0)
 ```
 
 This is the actual output of the snippet above, run against the built package — three signals from three different source types with configured credibility, all recently published and positive, with nothing uniform or concentrated enough to trip the astroturf checks. The `source` strings are labels you assign; `sourceCount` counts distinct labels and nothing checks that two labels are really two independent publishers.
 
-**Eligible evidence.** Only an observation with a `confidence` above 0 *and* a source type whose configured credibility is above 0 is eligible. The rest are still validated, but they contribute nothing to the score, the components, the flags, `sourceCount` or `confidence`, so adding more of them changes no output except `signalCount`. An unlisted source type has credibility 0, so its observations are ineligible. An observation's age lowers its weight; it does not make it ineligible.
+**Eligible evidence.** An observation is eligible only if its final effective weight (source credibility × `confidence` × recency decay) is above 0. The rest are still validated, but they contribute nothing to the score, the components, the flags, `sourceCount` or `confidence`, so adding more of them changes no output except `signalCount`. An unlisted source type has credibility 0, a `confidence` of 0 gives weight 0, and so does an age that has decayed the weight to exactly 0 (`halfLifeDays: 0` with any age above 0, or a date so old the weight underflows). An age that only lowers the weight, leaving it above 0, does not make an observation ineligible.
 
 If nothing is eligible, the result is explicit:
 
@@ -180,11 +180,11 @@ const ignored = anonymous.assessAuthenticity(
   config,
   { now: "2026-08-01T00:00:00Z" },
 );
-ignored.confidence;          // { level: "insufficient", effectiveSampleSize: 0, reason: "no observation has both a confidence above 0 and a source type with credibility above 0" }
+ignored.confidence;          // { level: "insufficient", effectiveSampleSize: 0, reason: "no observation has a positive effective weight (confidence, source credibility and recency decay must all be above 0)" }
 ignored.trustScore;          // null — no usable evidence, so no score (not a low score)
 ignored.eligibleSignalCount; // 0
 ignored.signalCount;         // 1
-ignored.explanation;         // "Insufficient evidence: no observation has both ... so no score is reported."
+ignored.explanation;         // "Insufficient evidence: no observation has a positive effective weight ... so no score is reported."
 ```
 
 `trustScore` is `null` exactly when `confidence.level` is `"insufficient"`, so handle `null` wherever you show or sort it.

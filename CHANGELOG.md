@@ -37,6 +37,13 @@ are labeled TC-nnn (the external audit) or by bug class (the internal sweep).
   `confidence` 0, an unlisted source type, or a source type configured with credibility 0 no
   longer counts toward `sourceCount`, diversity, volume, the uniformity checks, or
   confidence. Six such observations used to read as `high` confidence with a score of 60 to 75.
+  The same holds for an observation whose age has decayed its weight to exactly 0 (`halfLifeDays: 0`,
+  or a date so old the weight underflows): eligibility is decided by the final effective weight
+  (credibility x confidence x recency decay), which must be above 0. Before, such an observation
+  still counted, raised `sourceCount`, diversity and confidence, and, when every weight was 0, fell
+  back to a neutral consensus of 0.5. Six all-negative reviews with a 7-day half-life dated 2001 scored
+  60 with `high` confidence and outranked the same reviews all-positive at 46; both are now
+  `"insufficient"` with `trustScore: null`. `identified` already required a positive weight and is unchanged.
 - **No eligible evidence is `"insufficient"` (TC-003).** `ConfidenceLevel` gains
   `"insufficient"`, and `Confidence` gains an optional `reason`. `confidenceFromSampleSize(0, ...)`
   returns it whatever the thresholds are (a zero threshold used to give `high`). In `identified`,
@@ -56,7 +63,7 @@ are labeled TC-nnn (the external audit) or by bug class (the internal sweep).
     `Sentiment is unusually uniform, which lowers the score. This is a pattern in the numbers, not a finding about the observations.`
   - `Backed by very few independent sources; discounted.` is now
     `Evidence comes from very few distinct source types, which lowers the score.`
-  - New: `Insufficient evidence: no observation has both a confidence above 0 and a source type with credibility above 0, so no score is reported.`
+  - New: `Insufficient evidence: no observation has a positive effective weight (confidence, source credibility and recency decay must all be above 0), so no score is reported.`
   - Unchanged: `Sentiment is strongly positive.` and `Sentiment is lukewarm or negative.`
 - **A `dial` must be a preset name or a number.** An array, a `String` object, or `null` used
   to be coerced into a preset name or defaulted; it is now a `TypeError`.

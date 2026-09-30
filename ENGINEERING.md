@@ -23,8 +23,8 @@
   validated before it is merged. Scoring functions validate the config they
   are given and read each caller field once.
 - **Eligible evidence only.** A zero-weight signal (identified) or an
-  observation with confidence 0 or a zero-credibility source type (anonymous)
-  contributes nothing to any output. With no eligible evidence,
+  observation whose effective weight (credibility x confidence x recency decay)
+  is 0 (anonymous) contributes nothing to any output. With no eligible evidence,
   `confidence.level` is `"insufficient"` with a `reason`.
 - **Stable order.** `contributions` ties are broken by id, tier, source, proof,
   then age, so input order never changes the result.
