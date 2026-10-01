@@ -2,7 +2,7 @@
 
 Updated September 30, 2026 against GitHub main `7e25eb99c8f2f7432e019dab8620974139304f51`. This note prepares review of work after the 0.2.0 release; it is not a completed product audit or marketing certification.
 
-Registry check on September 30, 2026 returned `trust-core@0.2.0`. The response did not provide gitHead, so the published tarball's source commit remains unverified here.
+Registry check on September 30, 2026 returned `trust-core@0.2.0`. npm recorded no gitHead for this publish (it was published from a git worktree, whose `.git` pointer file npm does not read). The source was checked another way instead: all 22 files in the published tarball match a fresh build of this commit.
 
 ## Review cadence
 
