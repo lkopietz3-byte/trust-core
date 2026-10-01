@@ -1,6 +1,8 @@
 # Review and launch readiness
 
-Prepared September 30, 2026 against GitHub main `a1eb43b7a6e9d6916b14d885f353f9b65801a1dd`. This document records a preparation plan, not a production or marketing certification.
+Updated September 30, 2026 against GitHub main `7e25eb99c8f2f7432e019dab8620974139304f51`. This note prepares review of work after the 0.2.0 release; it is not a completed product audit or marketing certification.
+
+Registry check on September 30, 2026 returned `trust-core@0.2.0`. The response did not provide gitHead, so the published tarball's source commit remains unverified here.
 
 ## Review cadence
 
@@ -18,7 +20,7 @@ Finish condition: Every public promise maps to documented behavior; examples sho
 
 ## Declared verification commands
 
-Read from the inspected main's `package.json`. This documentation change has not executed these product checks; report any required check that is unavailable rather than treating it as passed. Use focused checks during implementation and existing release gates on the frozen candidate.
+Read from the inspected main's `package.json`. The PR records execution results for its final head; report any required check that is unavailable rather than treating it as passed. Use focused checks during implementation and existing release gates on the frozen candidate.
 
 - `npm run verify`: `npm run lint && npm run typecheck && npm test && npm run build && npm run verify:package`
 - `npm run lint`: `eslint . --max-warnings=0`
