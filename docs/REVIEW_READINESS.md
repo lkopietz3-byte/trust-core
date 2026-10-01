@@ -10,13 +10,13 @@ Keep automatic code reviews off during preparation. Request one focused `@codex 
 
 When this repo enters sustained launch/customer-facing development, enable its repository setting individually with **All PRs / On PR open / Exhaustive Off**. Keep the personal automatic default and credit-funded reviews off. Inspect the first result before expanding cadence. Review guidance lives in the root [AGENTS.md](../AGENTS.md); automated review supplements existing tests and release requirements.
 
-The six repo settings were verified off on September 29, 2026. These preferences are managed in ChatGPT, not activated by committing this file.
+Reported historical observation (September 29, 2026): six repository review settings were off. Their current state is unknown in this note; check ChatGPT before changing review cadence. Committing this file does not change them.
 
-## Next preparation task: Bound the public trust claims
+## Next preparation task: Review future public trust copy
 
-Reconcile README/package authenticity and trust copy with caller-supplied labels, statistical heuristics and each API's missing-evidence shape.
+The 0.2.0 README already bounds the heuristic, caller-supplied labels and missing-evidence outputs. Review future public copy and examples against those limits when they change.
 
-Finish condition: Every public promise maps to documented behavior; examples show insufficient evidence without claiming truth, identity or fraud verification.
+Finish condition for a future copy change: Each new promise maps to documented behavior; examples show insufficient evidence without claiming truth, identity or fraud verification.
 
 ## Declared verification commands
 
