@@ -1,5 +1,7 @@
 # trust-core
 
+**[Try it in your browser →](https://lkopietz3-byte.github.io/honesty-kits/#trust-core)** · Part of [honesty kits](https://github.com/lkopietz3-byte/honesty-kits), a family of small checks for the claims an AI product makes.
+
 Two complementary lenses on entity trust: score signals from contributors you know, and weigh how organic a corpus of anonymous sentiment looks when you don't. Zero runtime dependencies, ESM, framework-agnostic TypeScript. These are configurable weighted-average heuristics over the signals you supply — not a truth detector, a fraud detector, or a certification. See **Honest limits** below before you rely on either module for something adversarial.
 
 ## What it is
