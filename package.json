@@ -1,6 +1,6 @@
 {
   "name": "trust-core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Deterministic entity-trust scoring: weight known contributors' signals, and gauge how organic anonymous sentiment looks. Zero runtime dependencies.",
   "keywords": [
     "trust",
@@ -8,7 +8,8 @@
     "reviews",
     "reputation",
     "astroturf",
-    "authenticity"
+    "authenticity",
+    "honesty-kits"
   ],
   "author": "Lucas Kopietz",
   "license": "MIT",
@@ -16,7 +17,7 @@
     "type": "git",
     "url": "git+https://github.com/lkopietz3-byte/trust-core.git"
   },
-  "homepage": "https://github.com/lkopietz3-byte/trust-core#readme",
+  "homepage": "https://lkopietz3-byte.github.io/honesty-kits/#trust-core",
   "bugs": {
     "url": "https://github.com/lkopietz3-byte/trust-core/issues"
   },
