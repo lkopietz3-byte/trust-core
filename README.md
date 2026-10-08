@@ -25,7 +25,7 @@ A real product may need both halves at once. It can weight signals from known re
 npm install trust-core
 ```
 
-Or build from source: clone the repository and run `npm install && npm run build`. The behavior described below is version 0.2.0; [CHANGELOG.md](CHANGELOG.md) lists what changed from 0.1.0.
+Or build from source: clone the repository and run `npm install && npm run build`. The behavior described below is version 0.2.1; [CHANGELOG.md](CHANGELOG.md) lists what changed from 0.1.0.
 
 This is an ESM package (`"type": "module"`). ESM and CommonJS consumers work like this:
 

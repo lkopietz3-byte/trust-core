@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 `0.1.0` was published to npm on 2026-09-28. While the version is 0.x, a change that
 makes a previously accepted input throw or return a different result bumps the minor version.
 
+## [0.2.1] - 2026-10-07
+
+No change to the library's behavior or API.
+
+### Changed
+
+- The README links to the [in-browser playground](https://lkopietz3-byte.github.io/honesty-kits/#trust-core) and the honesty kits family, and the npm homepage now points to the playground.
+- Added the `honesty-kits` npm keyword so the family shows up together in search.
+
+### Security
+
+- Development lockfile: `source-map-js` 1.2.2 (GHSA-68fv-2mgg-jv7q). Development tooling only; the published package has no runtime dependencies.
+
 ## [0.2.0] - 2026-09-28
 
 A fix pass from an external audit and an internal one. Several inputs that used to be
