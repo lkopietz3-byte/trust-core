@@ -207,13 +207,14 @@ describe("README worked example reproduces exactly", () => {
     ];
     const verdict = assessAuthenticity(readmeSignals, readmeConfig, { now: "2026-08-01T00:00:00Z" });
 
-    // Three observations from three source types: about 2.89 effective source types of a reference 6 (it was
+    // Three observations from three source types: about 2.94 effective source types of a reference 6 (it was
     // 1 when diversity divided by the observation count, which let one observation earn full diversity). The
-    // marketplace post (weight 0.38) is just under the full-count weight of 0.425, so it counts as 0.89.
+    // marketplace post (credibility x confidence 0.4) is just under the full-count weight of 0.425, so it
+    // counts as 0.94.
     expect(verdict.trustScore).toBe(70);
     expect(verdict.components.consensus).toBeCloseTo(0.8288923795049216, 9);
-    expect(verdict.components.diversity).toBeCloseTo(0.48101243844790614, 9);
-    expect(verdict.components.volume).toBeCloseTo(0.5292110551176721, 9);
+    expect(verdict.components.diversity).toBeCloseTo(0.4901960784313726, 9);
+    expect(verdict.components.volume).toBeCloseTo(0.5347003329110822, 9);
     expect(verdict.components.recency).toBeCloseTo(0.9380486285411919, 9);
     expect(verdict.components.astroturfPenalty).toBe(0);
     expect(verdict.confidence).toEqual({ level: "moderate", effectiveSampleSize: 3 });

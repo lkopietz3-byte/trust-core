@@ -15,11 +15,12 @@
  *
  * Source labels are compared after trimming and case-folding, so `"forum"`,
  * `"Forum"` and `" forum "` are one source type. A source type counts in full
- * once its own effective weight reaches half of one fresh, fully confident
- * observation from the most credible configured source type, and in
- * proportion below that, so a near-weightless observation cannot add a source
- * type. Because a source type's count depends only on its own weight,
- * evidence added anywhere never makes another source type count for less.
+ * once its own summed credibility x confidence reaches `fullCountWeight`
+ * (0.425 by default), and in proportion below that, so a near-weightless
+ * observation cannot add a source type. Age is not applied here: old or
+ * undated evidence lowers `recency`, not breadth. Because a source type's
+ * count depends only on its own evidence, evidence added anywhere never makes
+ * another source type count for less.
  *
  * **When the score can drop.** Adding an observation never lowers
  * `trustScore` when its sentiment is at or above the corpus's weighted mean
@@ -142,10 +143,13 @@ export interface AstroturfRules {
    * at least 0.05 past `uniformMeanThreshold`. It ramps in linearly over that
    * 0.05 of mean and with the square of how far the variance is below its
    * threshold, so it starts at 0 at the thresholds (no cliff) and identical
-   * praise from 0.9 up (with the example threshold) gets all of it.
+   * praise from 0.9 up (with the example threshold) gets all of it. Because
+   * the variance term is squared, low but nonzero variance is discounted
+   * lightly: praise alternating 0.8 and 1.0 (variance 0.01, half the example
+   * threshold) gets a quarter of the penalty.
    */
   uniformPenalty: number;
-  /** Minimum effective observation count before the uniformity check applies (avoids false positives on tiny n): an observation at or above the full-count weight counts as one, a lighter one in proportion. The concentration check applies at any count. */
+  /** Minimum effective observation count before the uniformity check applies (avoids false positives on tiny n): an observation whose credibility x confidence reaches `fullCountWeight` counts as one, a lighter one in proportion. The concentration check applies at any count. */
   minSignalsForUniformCheck: number;
 }
 
@@ -164,6 +168,16 @@ export interface AnonymousConfig {
   recency: RecencyCurve;
   /** Source count at which the log-scaled volume term saturates to full credit. */
   volumeSaturation: number;
+  /**
+   * The full-count weight: a source type counts in full toward the effective
+   * source-type count once its summed credibility x confidence (recency is not
+   * applied here) reaches this, and in proportion below it. A finite number
+   * `> 0`, on the same scale as `sourceWeights` x `confidence`. Optional:
+   * `undefined` (and only `undefined`) selects the default of 0.425, half of a
+   * fully confident observation from a source type of credibility 0.85. If you
+   * scale every `sourceWeights` value, scale this by the same factor.
+   */
+  fullCountWeight?: number;
   /** Thresholds for the two discounted patterns. */
   astroturf: AstroturfRules;
   /** Cut-offs, in distinct eligible source types, for `high` and `moderate` confidence. */
@@ -181,6 +195,7 @@ export const EXAMPLE_ANONYMOUS_CONFIG: AnonymousConfig = deepFreeze({
   astroturfWeight: 0.35,
   recency: { halfLifeDays: 540, missingDateAgeDays: 540 },
   volumeSaturation: 12,
+  fullCountWeight: 0.425,
   astroturf: {
     concentrationSourceCeiling: 1,
     concentrationPenalty: 0.6,
@@ -192,12 +207,16 @@ export const EXAMPLE_ANONYMOUS_CONFIG: AnonymousConfig = deepFreeze({
   confidence: { high: 6, moderate: 3 },
 });
 
+/** The default full-count weight (see {@link AnonymousConfig.fullCountWeight}). */
+const DEFAULT_FULL_COUNT_WEIGHT = 0.425;
+
 const ANONYMOUS_CONFIG_KEYS = [
   "sourceWeights",
   "weights",
   "astroturfWeight",
   "recency",
   "volumeSaturation",
+  "fullCountWeight",
   "astroturf",
   "confidence",
 ] as const;
@@ -297,6 +316,10 @@ function buildConfig(parts: Record<(typeof ANONYMOUS_CONFIG_KEYS)[number], unkno
     astroturfWeight: checkNumber(parts.astroturfWeight, "astroturfWeight", { min: 0 }),
     recency: checkRecencyCurve(parts.recency, "recency"),
     volumeSaturation: checkNumber(parts.volumeSaturation, "volumeSaturation", { min: 0, minExclusive: true }),
+    fullCountWeight:
+      parts.fullCountWeight === undefined
+        ? DEFAULT_FULL_COUNT_WEIGHT
+        : checkNumber(parts.fullCountWeight, "fullCountWeight", { min: 0, minExclusive: true }),
     astroturf: checkAstroturfRules(parts.astroturf),
     confidence: checkThresholds(parts.confidence, "confidence"),
   });
@@ -327,7 +350,8 @@ export function resolveAnonymousConfig(overrides?: Partial<AnonymousConfig>): An
   if (overrides === undefined) return EXAMPLE_ANONYMOUS_CONFIG;
   const record = checkPlainRecord(overrides, "overrides");
   rejectUnknownKeys(record, ANONYMOUS_CONFIG_KEYS, "overrides");
-  const { sourceWeights, weights, astroturfWeight, recency, volumeSaturation, astroturf, confidence } = record;
+  const { sourceWeights, weights, astroturfWeight, recency, volumeSaturation, fullCountWeight, astroturf, confidence } =
+    record;
   const example = EXAMPLE_ANONYMOUS_CONFIG;
   return buildConfig({
     sourceWeights: mergeSourceWeights(example.sourceWeights, sourceWeights),
@@ -335,6 +359,7 @@ export function resolveAnonymousConfig(overrides?: Partial<AnonymousConfig>): An
     astroturfWeight: astroturfWeight === undefined ? example.astroturfWeight : astroturfWeight,
     recency: mergeSection(example.recency, recency, "recency"),
     volumeSaturation: volumeSaturation === undefined ? example.volumeSaturation : volumeSaturation,
+    fullCountWeight: fullCountWeight === undefined ? example.fullCountWeight : fullCountWeight,
     astroturf: mergeSection(example.astroturf, astroturf, "astroturf"),
     confidence: mergeSection(example.confidence, confidence, "confidence"),
   });
@@ -349,8 +374,18 @@ export function resolveAnonymousConfig(overrides?: Partial<AnonymousConfig>): An
 function readConfig(input: unknown): AnonymousConfig {
   const record = checkPlainRecord(input, "config");
   rejectUnknownKeys(record, ANONYMOUS_CONFIG_KEYS, "config");
-  const { sourceWeights, weights, astroturfWeight, recency, volumeSaturation, astroturf, confidence } = record;
-  return buildConfig({ sourceWeights, weights, astroturfWeight, recency, volumeSaturation, astroturf, confidence });
+  const { sourceWeights, weights, astroturfWeight, recency, volumeSaturation, fullCountWeight, astroturf, confidence } =
+    record;
+  return buildConfig({
+    sourceWeights,
+    weights,
+    astroturfWeight,
+    recency,
+    volumeSaturation,
+    fullCountWeight,
+    astroturf,
+    confidence,
+  });
 }
 
 /**
@@ -368,22 +403,6 @@ function sourceWeightLookup(config: AnonymousConfig): (source: string) => number
   for (const [key, weight] of Object.entries(config.sourceWeights)) byLabel.set(normalizeSourceLabel(key), weight);
   return (source) => byLabel.get(source) ?? 0;
 }
-
-/**
- * The full-count weight, as a fraction of the largest configured credibility:
- * a source type counts in full toward the effective source-type count once
- * its own summed effective weight reaches this fraction of one fresh,
- * fully confident observation from the most credible configured source type,
- * and in proportion below that. With the example config that is 0.425, so one
- * fresh forum post (0.77) counts in full and an observation at confidence
- * 0.001 counts for 0.002 of a source type.
- *
- * It depends only on that source type's own weight, never on its share of the
- * total, so evidence added to another source type can never make it count
- * for less. It is relative to the configured credibilities, so scaling every
- * `sourceWeights` value by the same factor changes nothing.
- */
-const FULL_COUNT_FRACTION = 0.5;
 
 /** A source type at or above this fraction of the full-count weight is counted in `sourceCount`. */
 const COUNTED_SOURCE_FRACTION = 0.5;
@@ -444,10 +463,9 @@ export interface AuthenticityAssessment {
   components: AuthenticityComponents;
   /**
    * Counted source types among ELIGIBLE observations: labels are trimmed and
-   * case-folded, and a source type is counted once its own effective weight
-   * reaches half of the full-count weight (a quarter of one fresh, fully
-   * confident observation from the most credible configured source type). At
-   * least 1 whenever any observation is eligible. The source strings are
+   * case-folded, and a source type is counted once its summed credibility x
+   * confidence reaches half of `fullCountWeight`, whatever the evidence's age.
+   * At least 1 whenever any observation is eligible. The source strings are
    * caller-supplied labels; nothing verifies they are independent publishers.
    */
   sourceCount: number;
@@ -555,6 +573,10 @@ export function assessAuthenticity(
   const labels: string[] = [];
   const weights: number[] = [];
   const decays: number[] = [];
+  // credibility x confidence, without recency: how much evidence there is,
+  // whatever its age. Breadth (the effective source count) and the uniformity
+  // minimum count this, so age lowers recency but never breadth.
+  const presence: number[] = [];
   let futureDated = 0;
   let anyDated = false;
   for (const s of observations) {
@@ -570,6 +592,7 @@ export function assessAuthenticity(
       labels.push(label);
       weights.push(w);
       decays.push(decay);
+      presence.push(credibility * s.confidence);
       if (age !== null) anyDated = true;
       else if (dated) futureDated += 1;
     }
@@ -578,12 +601,11 @@ export function assessAuthenticity(
 
   // Every eligible weight is above 0, so the total is positive.
   const totalWeight = exactSum(weights);
-  // Every configured credibility of an eligible observation is above 0, so this is too.
-  const fullCount = FULL_COUNT_FRACTION * Math.max(...Object.values(resolved.sourceWeights));
-  const { effectiveSources, sourceCount } = countSourceTypes(labels, weights, fullCount);
+  const fullCount = resolved.fullCountWeight ?? DEFAULT_FULL_COUNT_WEIGHT;
+  const { effectiveSources, sourceCount } = countSourceTypes(labels, presence, fullCount);
   // The uniformity minimum counts observations the same way: one at the
   // full-count weight or more counts as one, a lighter one in proportion.
-  const effectiveObservations = snapNearInteger(exactSum(weights.map((w) => Math.min(1, w / fullCount))));
+  const effectiveObservations = snapNearInteger(exactSum(presence.map((w) => Math.min(1, w / fullCount))));
 
   // Volume: log-saturating effective count of source types.
   const volume = clamp01(Math.log1p(effectiveSources) / Math.log1p(resolved.volumeSaturation));
@@ -640,7 +662,8 @@ export function assessAuthenticity(
 
 /**
  * The effective number of source types, and how many are counted. Each
- * normalized label adds `min(1, ownWeight / fullCount)`; `sourceCount` is the
+ * normalized label adds `min(1, ownPresence / fullCount)`, where presence is
+ * credibility x confidence summed over its observations (no recency); `sourceCount` is the
  * number of labels at or above half of that, and at least 1. Summed exactly
  * and snapped, so the result does not depend on the order labels were first
  * seen or on the last bit of a sum.
@@ -729,7 +752,7 @@ function computeAstroturfPenalty(x: {
 
   return {
     penalty: clamp01(concentration + uniform),
-    flags: { lowSourceCount: concentrationShare > 0, uniformSentiment: uniformStrength > 0 },
+    flags: { lowSourceCount: concentration > 0, uniformSentiment: uniform > 0 },
   };
 }
 
