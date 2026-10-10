@@ -496,41 +496,86 @@ export function scoreEntity(
 const CONFIDENCE_LEVELS: readonly string[] = ["high", "moderate", "thin", "insufficient"];
 
 /**
- * Combine several already-scored dimensions (e.g. quality, reliability,
- * communication) into one composite using caller-supplied weights.
- * Dimensions with a missing or non-positive weight are excluded. `weights` is
- * looked up with `Object.hasOwn` so a prototype-chain dimension name is
- * treated as missing (weight 0) rather than resolving to an inherited,
- * non-numeric value.
- *
- * Returns `null`, not a number, when the composite would not be measured:
- * when no dimension has a positive weight, or when any positively weighted
- * dimension's `confidence.level` is `"insufficient"`. An insufficient
- * dimension's `score` is the bare prior, and averaging it in would present an
- * assumption as a measurement. Handle `null` before sorting or comparing
- * (JavaScript's `<` and `-` treat it as `0`).
- *
- * @throws TypeError if `scores` or `weights` is not a plain object, or a
- *   dimension is not an object with a `confidence` object whose `level` is a
- *   string.
- * @throws RangeError if a weight present in `weights` is `NaN` or infinite, a
- *   dimension's `score` is not in `[0, 100]`, or its `confidence.level` is not
- *   a known level.
+ * The default minimum `nEff` for a dimension to count as measured in
+ * {@link composeDimensions}: a quarter of one reference (weight 1.0) signal.
+ * Below it, a dimension's score is almost entirely its prior.
  */
-export function composeDimensions(
+const DEFAULT_MIN_DIMENSION_EVIDENCE = 0.25;
+
+/** Options for {@link composeDimensionsDetailed}. */
+export interface ComposeDimensionsOptions {
+  /**
+   * A positively weighted dimension whose `nEff` is below this is treated as
+   * unmeasured and left out (its score would be mostly its prior). A finite
+   * number `>= 0`; defaults to 0.25, a quarter of one reference signal.
+   * Dimensions whose `confidence.level` is `"insufficient"` are always left out.
+   */
+  minEffectiveSampleSize?: number;
+}
+
+/** The result of {@link composeDimensionsDetailed}. */
+export interface ComposedDimensions {
+  /** Weighted average over the measured dimensions, or `null` when none is measured. */
+  score: number | null;
+  /** Positively weighted dimensions that went into `score`, sorted by name. */
+  measured: string[];
+  /** Positively weighted dimensions left out for lack of evidence, sorted by name. Dimensions with no positive weight are in neither list. */
+  unmeasured: string[];
+}
+
+const COMPOSE_OPTION_KEYS = ["minEffectiveSampleSize"] as const;
+
+const byName = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * Combine several already-scored dimensions (e.g. quality, reliability,
+ * communication) into one composite using caller-supplied weights, and say
+ * which dimensions were measured. Dimensions with a missing or non-positive
+ * weight are excluded. A positively weighted dimension is **unmeasured** when
+ * its `confidence.level` is `"insufficient"` or its `nEff` is below
+ * `minEffectiveSampleSize` (default 0.25): its score would be (almost) the
+ * bare prior, so averaging it in would present an assumption as a
+ * measurement. Unmeasured dimensions are left out and the remaining weights
+ * renormalized; `score` is `null` only when no dimension is measured. Handle
+ * `null` before sorting or comparing (JavaScript's `<` and `-` treat it as `0`).
+ *
+ * `weights` is looked up with `Object.hasOwn`, so a prototype-chain dimension
+ * name is treated as missing (weight 0).
+ *
+ * @throws TypeError if `scores`, `weights` or `options` is not a plain object
+ *   (`options` may be `undefined`), `options` has an unknown key, or a dimension
+ *   is not an object with a `confidence` object whose `level` is a string.
+ * @throws RangeError if a weight present in `weights` is `NaN` or infinite, a
+ *   dimension's `score` is not in `[0, 100]`, its `nEff` is not a finite number
+ *   `>= 0`, its `confidence.level` is not a known level, or
+ *   `minEffectiveSampleSize` is not a finite number `>= 0`.
+ */
+export function composeDimensionsDetailed(
   scores: Record<string, EntityScore>,
   weights: Record<string, number>,
-): number | null {
+  options?: ComposeDimensionsOptions,
+): ComposedDimensions {
   checkPlainRecord(scores, "scores");
   checkPlainRecord(weights, "weights");
+  let minEvidence = DEFAULT_MIN_DIMENSION_EVIDENCE;
+  if (options !== undefined) {
+    const record = checkPlainRecord(options, "options");
+    rejectUnknownKeys(record, COMPOSE_OPTION_KEYS, "options");
+    const { minEffectiveSampleSize } = record;
+    if (minEffectiveSampleSize !== undefined) {
+      minEvidence = checkNumber(minEffectiveSampleSize, "options.minEffectiveSampleSize", { min: 0 });
+    }
+  }
   const numerators: number[] = [];
   const denominators: number[] = [];
-  let unmeasured = false;
+  const measured: string[] = [];
+  const unmeasured: string[] = [];
   for (const [key, entry] of Object.entries(scores)) {
     const w = hasOwn(weights, key) ? weights[key]! : 0;
     checkNumber(w, `weights[${show(key)}]`, {});
     const dimension = checkRecord(entry, `scores[${show(key)}]`);
     const dimensionScore = checkNumber(dimension.score, `scores[${show(key)}].score`, { min: 0, max: 100 });
+    const nEff = checkNumber(dimension.nEff, `scores[${show(key)}].nEff`, { min: 0 });
     const { level } = checkRecord(dimension.confidence, `scores[${show(key)}].confidence`);
     if (typeof level !== "string") {
       throw new TypeError(`scores[${show(key)}].confidence.level must be a string (got ${show(level)})`);
@@ -541,11 +586,33 @@ export function composeDimensions(
       );
     }
     if (w <= 0) continue;
-    if (level === "insufficient") unmeasured = true;
+    if (level === "insufficient" || nEff < minEvidence) {
+      unmeasured.push(key);
+      continue;
+    }
+    measured.push(key);
     numerators.push(assertFinite(w * dimensionScore, `weighted score of dimension ${show(key)}`));
     denominators.push(w);
   }
-  if (unmeasured) return null;
   const den = exactSum(denominators);
-  return den > 0 ? clamp(exactSum(numerators) / den, 0, 100) : null;
+  return {
+    score: den > 0 ? clamp(exactSum(numerators) / den, 0, 100) : null,
+    measured: measured.sort(byName),
+    unmeasured: unmeasured.sort(byName),
+  };
+}
+
+/**
+ * The composite score of {@link composeDimensionsDetailed} with default
+ * options: a weighted average over the measured dimensions, or `null` when no
+ * positively weighted dimension is measured. Use the detailed form to see
+ * which dimensions were left out.
+ *
+ * @throws See {@link composeDimensionsDetailed}.
+ */
+export function composeDimensions(
+  scores: Record<string, EntityScore>,
+  weights: Record<string, number>,
+): number | null {
+  return composeDimensionsDetailed(scores, weights).score;
 }
