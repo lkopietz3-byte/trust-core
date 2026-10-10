@@ -496,19 +496,23 @@ export function scoreEntity(
 const CONFIDENCE_LEVELS: readonly string[] = ["high", "moderate", "thin", "insufficient"];
 
 /**
- * The default minimum `nEff` for a dimension to count as measured in
+ * The default evidence level at which a dimension carries its full weight in
  * {@link composeDimensions}: a quarter of one reference (weight 1.0) signal.
- * Below it, a dimension's score is almost entirely its prior.
+ * Below it, a dimension's weight is scaled down in proportion to its `nEff`,
+ * because its score is mostly its prior.
  */
 const DEFAULT_MIN_DIMENSION_EVIDENCE = 0.25;
 
 /** Options for {@link composeDimensionsDetailed}. */
 export interface ComposeDimensionsOptions {
   /**
-   * A positively weighted dimension whose `nEff` is below this is treated as
-   * unmeasured and left out (its score would be mostly its prior). A finite
-   * number `>= 0`; defaults to 0.25, a quarter of one reference signal.
-   * Dimensions whose `confidence.level` is `"insufficient"` are always left out.
+   * The `nEff` at which a positively weighted dimension carries its full
+   * weight. Below it, the dimension's weight is multiplied by
+   * `nEff / minEffectiveSampleSize`, so a dimension that is mostly prior
+   * counts for little and its influence grows smoothly as evidence arrives (no
+   * cliff). A finite number `>= 0`; defaults to 0.25, a quarter of one
+   * reference signal. `0` turns the scaling off. A dimension whose
+   * `confidence.level` is `"insufficient"` (nEff 0) always gets weight 0.
    */
   minEffectiveSampleSize?: number;
 }
@@ -517,9 +521,9 @@ export interface ComposeDimensionsOptions {
 export interface ComposedDimensions {
   /** Weighted average over the measured dimensions, or `null` when none is measured. */
   score: number | null;
-  /** Positively weighted dimensions that went into `score`, sorted by name. */
+  /** Positively weighted dimensions that carry some weight in `score` (any evidence at all), sorted by name. */
   measured: string[];
-  /** Positively weighted dimensions left out for lack of evidence, sorted by name. Dimensions with no positive weight are in neither list. */
+  /** Positively weighted dimensions with no evidence (`"insufficient"`, nEff 0), which carry weight 0, sorted by name. Dimensions with no positive weight are in neither list. */
   unmeasured: string[];
 }
 
@@ -531,13 +535,18 @@ const byName = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
  * Combine several already-scored dimensions (e.g. quality, reliability,
  * communication) into one composite using caller-supplied weights, and say
  * which dimensions were measured. Dimensions with a missing or non-positive
- * weight are excluded. A positively weighted dimension is **unmeasured** when
- * its `confidence.level` is `"insufficient"` or its `nEff` is below
- * `minEffectiveSampleSize` (default 0.25): its score would be (almost) the
- * bare prior, so averaging it in would present an assumption as a
- * measurement. Unmeasured dimensions are left out and the remaining weights
+ * weight are excluded. Each positively weighted dimension's weight is scaled
+ * by `min(1, nEff / minEffectiveSampleSize)` (default 0.25), so a dimension
+ * whose score is mostly its prior counts for little, and an **unmeasured**
+ * one (`confidence.level` `"insufficient"`, nEff 0) counts for nothing: a bare
+ * prior is never averaged in as a measurement. The scaled weights are
  * renormalized; `score` is `null` only when no dimension is measured. Handle
  * `null` before sorting or comparing (JavaScript's `<` and `-` treat it as `0`).
+ *
+ * Leaving a dimension out changes what the composite averages, so a vendor
+ * with no reliability data is scored on quality alone and can outrank one
+ * whose reliability was measured as mediocre. Compare composites with
+ * `unmeasured` in view.
  *
  * `weights` is looked up with `Object.hasOwn`, so a prototype-chain dimension
  * name is treated as missing (weight 0).
@@ -586,13 +595,15 @@ export function composeDimensionsDetailed(
       );
     }
     if (w <= 0) continue;
-    if (level === "insufficient" || nEff < minEvidence) {
+    const coverage = level === "insufficient" || nEff === 0 ? 0 : minEvidence > 0 ? Math.min(1, nEff / minEvidence) : 1;
+    if (coverage === 0) {
       unmeasured.push(key);
       continue;
     }
     measured.push(key);
-    numerators.push(assertFinite(w * dimensionScore, `weighted score of dimension ${show(key)}`));
-    denominators.push(w);
+    const scaled = w * coverage;
+    numerators.push(assertFinite(scaled * dimensionScore, `weighted score of dimension ${show(key)}`));
+    denominators.push(scaled);
   }
   const den = exactSum(denominators);
   return {
