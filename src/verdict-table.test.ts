@@ -414,6 +414,56 @@ describe("verdict table: review round 2 (ring at 0.9, piling up, labels, gate)",
   });
 });
 
+describe("verdict table: review round 3 (age and breadth, config coupling, flag truth)", () => {
+  const SIX = ["forum", "community", "marketplace", "aggregator", "blog", "social"] as const;
+
+  it("P1: old evidence counts for breadth like fresh evidence (age lowers recency, not breadth)", () => {
+    const oldEach = assess(SIX.map((s) => obs(s, 0.6, { publishedAt: daysAgo(1100) })));
+    const freshEach = assess(SIX.map((s) => obs(s, 0.6, { publishedAt: daysAgo(5) })));
+    expect(oldEach.flags.lowSourceCount).toBe(false);
+    expect(oldEach.sourceCount).toBe(6);
+    expect(oldEach.components.diversity).toBe(freshEach.components.diversity);
+    expect(oldEach.components.recency).toBeLessThan(freshEach.components.recency);
+  });
+
+  it("P1: undated mentions count for breadth", () => {
+    const undated = assess([...[0, 1, 2].map(() => obs("blog", 0.6, { publishedAt: null })), obs("social", 0.6, { publishedAt: null })]);
+    expect(undated.flags.lowSourceCount).toBe(false);
+    expect(undated.sourceCount).toBe(2);
+  });
+
+  it("P1: one old mention on each of five other platforms gives an honest set full breadth", () => {
+    const honest = assess([
+      ...ratings([...repeat(25, 5), ...repeat(7, 4), ...repeat(3, 3), ...repeat(2, 2), ...repeat(3, 1)], ["marketplace"], 700),
+      ...["forum", "community", "aggregator", "blog", "social"].map((s, i) => obs(s, stars(4), { publishedAt: daysAgo(365 + i * 80) })),
+    ]);
+    expect(honest.flags).toEqual({ lowSourceCount: false, uniformSentiment: false });
+    expect(honest.sourceCount).toBe(6);
+  });
+
+  it("P2: an unused, highly weighted source type in the config changes nothing", () => {
+    const four = ["forum", "marketplace", "blog", "social"].map((s) => obs(s, 0.6, { publishedAt: daysAgo(5) }));
+    const withUnused = resolveAnonymousConfig({ sourceWeights: { verified: 2 } });
+    expect(assess(four, withUnused)).toEqual(assess(four));
+  });
+
+  it("P2: with concentrationPenalty 0, nothing claims concentration lowered the score", () => {
+    const noConcentration = resolveAnonymousConfig({ astroturf: { ...CONFIG.astroturf, concentrationPenalty: 0 } });
+    const one = assess([obs("forum", 0.6)], noConcentration);
+    expect(one.components.astroturfPenalty).toBe(0);
+    expect(one.flags.lowSourceCount).toBe(false);
+    expect(one.explanation).not.toContain("very few distinct source types, which lowers the score");
+  });
+
+  it("documented trade-off, both directions: one fresh post per platform clears a ring's concentration; a faint one does not", () => {
+    const ring = Array.from({ length: 30 }, (_, i) => obs("marketplace", i % 2 ? 1 : 0.5, { publishedAt: daysAgo(i) }));
+    const fresh = assess([...ring, ...["forum", "community", "aggregator", "blog", "social"].map((s) => obs(s, 1, { publishedAt: daysAgo(2) }))]);
+    const faint = assess([...ring, ...["forum", "community", "aggregator", "blog", "social"].map((s) => obs(s, 1, { confidence: 0.01 }))]);
+    expect(fresh.flags.lowSourceCount).toBe(false);
+    expect(faint.flags.lowSourceCount).toBe(true);
+  });
+});
+
 describe("verdict table: identified mode", () => {
   const config = EXAMPLE_IDENTIFIED_CONFIG;
 
@@ -457,7 +507,23 @@ describe("verdict table: identified mode", () => {
     });
   });
 
-  it("P2: a single near-weightless signal does not sneak a bare prior into the composite", () => {
+  it("P2 (round 3): composeDimensions has no cliff as a thin dimension gains evidence", () => {
+    const quality = scoreEntity(Array.from({ length: 30 }, (_, i) => known(`q${i}`, 85)), config, { now: NOW, prior: 60 });
+    // new/direct/none at reputation 81 and 82 weigh 0.2496 and 0.2512: either side of 0.25.
+    const thin = (rep: number) =>
+      scoreEntity([known("t", 95, { tier: "new", proof: "none", reputation: rep, occurredAt: NOW })], config, { now: NOW, prior: 70 });
+    const below = thin(81);
+    const above = thin(82);
+    expect(below.nEff).toBeLessThan(0.25);
+    expect(above.nEff).toBeGreaterThan(0.25);
+    const w = { quality: 2, reliability: 1 };
+    const a = composeDimensions({ quality, reliability: below }, w) as number;
+    const b = composeDimensions({ quality, reliability: above }, w) as number;
+    expect(Math.abs(a - b)).toBeLessThan(0.5);
+    expect(composeDimensionsDetailed({ quality, reliability: below }, w).measured).toEqual(["quality", "reliability"]);
+  });
+
+  it("P2: a single near-weightless signal barely moves the composite", () => {
     const quality = scoreEntity(Array.from({ length: 30 }, (_, i) => known(`q${i}`, 85)), config, { now: NOW, prior: 60 });
     const nearBare = scoreEntity(
       [known("b", 10, { tier: "new", source: "imported", proof: "none", occurredAt: "2020-01-01T00:00:00Z" })],
@@ -466,10 +532,10 @@ describe("verdict table: identified mode", () => {
     );
     expect(nearBare.confidence.level).toBe("thin");
     expect(nearBare.nEff).toBeLessThan(0.25);
-    expect(composeDimensions({ quality, reliability: nearBare }, { quality: 2, reliability: 1 })).toBe(quality.score);
-    expect(composeDimensionsDetailed({ quality, reliability: nearBare }, { quality: 2, reliability: 1 }).unmeasured).toEqual([
-      "reliability",
-    ]);
+    const composite = composeDimensions({ quality, reliability: nearBare }, { quality: 2, reliability: 1 }) as number;
+    // Reliability's weight is scaled by nEff / 0.25, so its near-prior score pulls the composite by well under a point.
+    expect(Math.abs(composite - quality.score)).toBeLessThan(1);
+    expect(composeDimensionsDetailed({ quality, reliability: nearBare }, { quality: 2, reliability: 1 }).unmeasured).toEqual([]);
   });
 });
 
@@ -632,10 +698,12 @@ describe("property: weight scale", () => {
     }
   }, 60_000);
 
-  it("anonymous: scaling every source credibility by a constant changes nothing", () => {
+  it("anonymous: scaling every source credibility and the full-count weight by a constant changes nothing", () => {
     const rand = mulberry32(11);
+    // The full-count weight is on the same scale, so it scales with them.
     const times4 = resolveAnonymousConfig({
       sourceWeights: Object.fromEntries(Object.entries(CONFIG.sourceWeights).map(([key, w]) => [key, w * 4])),
+      fullCountWeight: (CONFIG.fullCountWeight as number) * 4,
     });
     for (let trial = 0; trial < 200; trial++) {
       const corpus = randomCorpus(rand);

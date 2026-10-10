@@ -322,7 +322,8 @@ describe("exactSum is the correctly rounded exact sum (oracle: BigInt arithmetic
       const expected = Number(exact) * 2 ** -SCALE;
       expect(exactSum(terms.map((term) => term.value))).toBe(expected === 0 ? 0 : expected);
     }
-  });
+    // 20,000 BigInt trials take about 1s idle but exceeded the 5s default on a heavily loaded machine.
+  }, 30_000);
 
   it("gets constructed near-ties right", () => {
     const ulp = 2 ** -52;
