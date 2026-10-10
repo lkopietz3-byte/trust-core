@@ -18,6 +18,7 @@ import {
 } from "./anonymous/index.js";
 import {
   composeDimensions,
+  composeDimensionsDetailed,
   EXAMPLE_IDENTIFIED_CONFIG,
   resolveIdentifiedConfig,
   scoreEntity,
@@ -216,20 +217,19 @@ describe("verdict table: anonymous mode on the example config", () => {
 
   // Self-hunt rows: attempts to buy a clean score, and honest shapes that must not be over-penalized.
 
-  it("a second source type carrying a sliver of the weight earns only a sliver of relief", () => {
+  it("small second source types earn proportional relief; one real post on another platform counts in full", () => {
     const ring = r.singleSourceRing.trustScore as number;
-    const oneRealBlog = assess([...SETS.singleSourceRing, obs("blog", 0.75)]);
     const fiveSmallDecoys = assess([
       ...SETS.singleSourceRing,
       ...["blog", "aggregator", "marketplace", "social", "community"].map((s) => obs(s, 0.7, { confidence: 0.12 })),
     ]);
-    for (const partial of [oneRealBlog, fiveSmallDecoys]) {
-      expect(partial.flags.lowSourceCount).toBe(true);
-      expect(partial.sourceCount).toBe(1);
-      expect(partial.components.astroturfPenalty).toBeGreaterThan(0.2);
-      expect(partial.trustScore as number).toBeLessThan(r.mixedHonest.trustScore as number);
-      expect(partial.trustScore as number).toBeGreaterThanOrEqual(ring);
-    }
+    expect(fiveSmallDecoys.flags.lowSourceCount).toBe(true);
+    expect(fiveSmallDecoys.sourceCount).toBe(1);
+    expect(fiveSmallDecoys.components.astroturfPenalty).toBeGreaterThan(0.1);
+    expect(fiveSmallDecoys.trustScore as number).toBeGreaterThanOrEqual(ring);
+    // Documented trade-off: a post with real weight is real evidence, so it counts.
+    const oneRealBlog = assess([...SETS.singleSourceRing, obs("blog", 0.75)]);
+    expect(oneRealBlog.flags.lowSourceCount).toBe(false);
   });
 
   it("future-dating a ring does not buy recency", () => {
@@ -255,19 +255,14 @@ describe("verdict table: anonymous mode on the example config", () => {
     expect(two.trustScore as number).toBeGreaterThan(one.trustScore as number);
   });
 
-  it("one dominant platform with a single mention elsewhere reads as concentrated (partially)", () => {
-    const dominant = assess([
-      ...ratings([...repeat(30, 5), ...repeat(10, 4)], ["marketplace"], 300),
-      obs("blog", stars(5), { publishedAt: daysAgo(60) }),
-    ]);
-    expect(dominant.flags.lowSourceCount).toBe(true);
-    expect(dominant.components.astroturfPenalty).toBeGreaterThan(0);
-    expect(dominant.components.astroturfPenalty).toBeLessThan(CONFIG.astroturf.concentrationPenalty);
-    const lopsided = assess([
-      ...ratings([...repeat(18, 5), ...repeat(9, 4)], ["marketplace"], 200),
-      ...ratings([5, 5, 4], ["forum"], 200),
-    ]);
-    expect(lopsided.flags.lowSourceCount).toBe(false);
+  it("one dominant platform: a real mention elsewhere counts, a faint one counts in proportion", () => {
+    const marketplace = ratings([...repeat(30, 5), ...repeat(10, 4)], ["marketplace"], 300);
+    const realMention = assess([...marketplace, obs("blog", stars(5), { publishedAt: daysAgo(60) })]);
+    expect(realMention.flags.lowSourceCount).toBe(false);
+    const faintMention = assess([...marketplace, obs("blog", stars(5), { confidence: 0.2, publishedAt: daysAgo(60) })]);
+    expect(faintMention.flags.lowSourceCount).toBe(true);
+    expect(faintMention.components.astroturfPenalty).toBeGreaterThan(0);
+    expect(faintMention.components.astroturfPenalty).toBeLessThan(CONFIG.astroturf.concentrationPenalty);
   });
 
   it("4.96 stars still ranks at or above 4.60 stars", () => {
@@ -341,6 +336,84 @@ function known(id: string, value: number, overrides: Partial<IdentifiedSignal> =
   };
 }
 
+describe("verdict table: review round 2 (ring at 0.9, piling up, labels, gate)", () => {
+  const OTHERS = ["forum", "community", "aggregator", "blog", "social"] as const;
+  /** 30 marketplace posts plus 2 on each of five other source types, with the given sentiments. */
+  const footprint = (sentimentAt: (i: number) => number): AnonymousSignal[] => [
+    ...Array.from({ length: 30 }, (_, i) => obs("marketplace", sentimentAt(i), { publishedAt: daysAgo(i * 6) })),
+    ...OTHERS.flatMap((s, k) => [0, 1].map((j) => obs(s, sentimentAt(30 + 2 * k + j), { publishedAt: daysAgo(10 + j * 40) }))),
+  ];
+  /** A J-shaped star distribution (many 5s, some 1s), interleaved deterministically. */
+  const J = [5, 5, 4, 5, 5, 1, 5, 4, 5, 3, 5, 5, 2, 5, 4, 5, 5, 1, 5, 5];
+
+  it("P1-A: identical 0.9 praise on an honest footprint ranks below an honest J-shaped set", () => {
+    const ring = assess(footprint(() => 0.9));
+    const honest = assess(footprint((i) => stars(J[i % J.length] as number)));
+    expect(ring.flags.uniformSentiment).toBe(true);
+    expect(ring.components.astroturfPenalty).toBeGreaterThanOrEqual(0.3);
+    expect(honest.flags).toEqual({ lowSourceCount: false, uniformSentiment: false });
+    expect(ring.trustScore as number).toBeLessThan(honest.trustScore as number);
+  });
+
+  it("P1-A: identical praise from 0.88 up gets most of the uniformity discount, even one post per type", () => {
+    for (const v of [0.88, 0.9, 0.92]) expect(assess(footprint(() => v)).components.astroturfPenalty).toBeGreaterThanOrEqual(0.2);
+    const six = assess(["forum", "community", "marketplace", "aggregator", "blog", "social"].map((s) => obs(s, 0.9)));
+    expect(six.flags.uniformSentiment).toBe(true);
+    expect(six.components.astroturfPenalty).toBeGreaterThanOrEqual(0.3);
+  });
+
+  it("P1-B: piling up same-platform reviews next to one other-platform post never lowers the score", () => {
+    const pile = (k: number, other: string, n = 1) => [
+      ...Array.from({ length: n }, () => obs(other, 0.6)),
+      ...Array.from({ length: k }, () => obs("forum", 0.6)),
+    ];
+    const aggregator = [1, 8, 20, 40].map((k) => score(pile(k, "aggregator")));
+    for (let i = 1; i < aggregator.length; i++) expect(aggregator[i]).toBeGreaterThanOrEqual(aggregator[i - 1] as number);
+    expect(score(pile(80, "blog", 3))).toBeGreaterThanOrEqual(score(pile(20, "blog", 3)));
+  });
+
+  it("P1-B: a near-weightless second platform still counts for almost nothing", () => {
+    const decoyed = assess([...SETS.singleSourceRing, obs("aggregator", 0.7, { confidence: 0.001 })]);
+    expect(decoyed.flags.lowSourceCount).toBe(true);
+    expect(decoyed.components.astroturfPenalty).toBeGreaterThan(0.59);
+  });
+
+  it("P2: a case or space variant of a shipped source type overrides it instead of throwing", () => {
+    const config = resolveAnonymousConfig({ sourceWeights: { Forum: 1 } });
+    const viaVariant = assess([obs("forum", 0.8)], config);
+    const explicit = assess([obs("forum", 0.8)], resolveAnonymousConfig({ sourceWeights: { forum: 1 } }));
+    expect(viaVariant).toEqual(explicit);
+    expect(() => resolveAnonymousConfig({ sourceWeights: { Forum: 1, " forum": 0.5 } })).toThrow(RangeError);
+  });
+
+  it("P2: near-integer effective counts are not floored by roundoff", () => {
+    // Source b carries 0.6 of 12.0 total weight (5%) and, at 0.6, at least the full-count weight. In
+    // floating point the dominant source's total lands a hair above 11.4, which used to floor the
+    // effective count from 2 to 1 and flag concentration.
+    const config = resolveAnonymousConfig({ sourceWeights: { a: 1, b: 1 } });
+    const corpus = [
+      ...Array.from({ length: 17 }, () => obs("a", 0.3, { confidence: 11.4 / 17, publishedAt: NOW })),
+      obs("b", 0.3, { confidence: 0.3, publishedAt: NOW }),
+      obs("b", 0.3, { confidence: 0.3, publishedAt: NOW }),
+    ];
+    const result = assess(corpus, config);
+    expect(result.sourceCount).toBe(2);
+    expect(result.flags.lowSourceCount).toBe(false);
+    expect(result.components.astroturfPenalty).toBe(0);
+  });
+
+  it("P3: the uniformity minimum counts effective observations, so a near-weightless third post does not open it", () => {
+    const two = assess([obs("forum", 1), obs("blog", 1)]);
+    const padded = assess([obs("forum", 1), obs("blog", 1), obs("social", 1, { confidence: 0.02 })]);
+    expect(two.flags.uniformSentiment).toBe(false);
+    expect(padded.flags.uniformSentiment).toBe(false);
+  });
+
+  it("P3: the explanation calls the count what it is: effective source types", () => {
+    expect(assess(SETS.mixedHonest).explanation).toContain("effective source types (independence not verified)");
+  });
+});
+
 describe("verdict table: identified mode", () => {
   const config = EXAMPLE_IDENTIFIED_CONFIG;
 
@@ -367,11 +440,36 @@ describe("verdict table: identified mode", () => {
       config,
       { now: NOW, prior: 50 },
     );
-    expect(composeDimensions({ quality: empty, reliability: measured }, { quality: 1, reliability: 1 })).toBeNull();
     expect(composeDimensions({ quality: empty }, { quality: 1 })).toBeNull();
     expect(composeDimensions({ quality: measured }, {})).toBeNull();
     // An insufficient dimension that carries no weight is simply not part of the composite.
     expect(composeDimensions({ quality: empty, reliability: measured }, { reliability: 1 })).toBe(measured.score);
+  });
+
+  it("P2: an empty dimension is dropped and the rest renormalized, and the drop is visible", () => {
+    const empty = scoreEntity([], config, { now: NOW, prior: 80 });
+    const measured = scoreEntity(Array.from({ length: 12 }, (_, i) => known(`m${i}`, 40)), config, { now: NOW, prior: 50 });
+    expect(composeDimensions({ quality: empty, reliability: measured }, { quality: 1, reliability: 1 })).toBe(measured.score);
+    expect(composeDimensionsDetailed({ quality: empty, reliability: measured }, { quality: 1, reliability: 1 })).toEqual({
+      score: measured.score,
+      measured: ["reliability"],
+      unmeasured: ["quality"],
+    });
+  });
+
+  it("P2: a single near-weightless signal does not sneak a bare prior into the composite", () => {
+    const quality = scoreEntity(Array.from({ length: 30 }, (_, i) => known(`q${i}`, 85)), config, { now: NOW, prior: 60 });
+    const nearBare = scoreEntity(
+      [known("b", 10, { tier: "new", source: "imported", proof: "none", occurredAt: "2020-01-01T00:00:00Z" })],
+      config,
+      { now: NOW, prior: 70 },
+    );
+    expect(nearBare.confidence.level).toBe("thin");
+    expect(nearBare.nEff).toBeLessThan(0.25);
+    expect(composeDimensions({ quality, reliability: nearBare }, { quality: 2, reliability: 1 })).toBe(quality.score);
+    expect(composeDimensionsDetailed({ quality, reliability: nearBare }, { quality: 2, reliability: 1 }).unmeasured).toEqual([
+      "reliability",
+    ]);
   });
 });
 
@@ -393,14 +491,13 @@ function randomCorpus(rand: () => number): AnonymousSignal[] {
 }
 
 describe("property: anonymous monotonicity (seeded fuzz)", () => {
-  it("a confirming observation can lower the score only through a visible concentration or uniformity signal", () => {
+  it("a confirming observation, from any source type, can lower the score only by raising the uniformity discount", () => {
     // A confirming observation agrees with the corpus (sentiment at or above
-    // its weighted mean) and is published at `now`. The two pattern discounts
-    // are allowed to respond to it (more of one source type is more
-    // concentrated; more identical praise is more uniform), but only in a way
-    // a caller can see: a larger astroturfPenalty or a smaller volume (the
-    // effective source breadth). Every other path must leave the score where
-    // it was or raise it.
+    // its weighted mean) and is published at `now`. Source types count by
+    // their own weight, so it can never make another source type count for
+    // less: the only way it can lower the score is by making the corpus look
+    // more uniform (a larger astroturfPenalty, including the uniformity
+    // minimum starting to apply).
     const rand = mulberry32(20261010);
     let checked = 0;
     for (let trial = 0; trial < 600; trial++) {
@@ -412,10 +509,10 @@ describe("property: anonymous monotonicity (seeded fuzz)", () => {
       const source = ANON_SOURCES[Math.floor(rand() * ANON_SOURCES.length)] as string;
       const added = obs(source, sentiment, { confidence: 0.05 + rand() * 0.95, publishedAt: NOW });
       const after = assess([...corpus, added]);
-      const visible =
-        after.components.astroturfPenalty > before.components.astroturfPenalty ||
-        after.components.volume < before.components.volume;
-      if (!visible) {
+      expect(after.components.volume).toBeGreaterThanOrEqual(before.components.volume);
+      expect(after.components.diversity).toBeGreaterThanOrEqual(before.components.diversity);
+      if (!before.flags.lowSourceCount) expect(after.flags.lowSourceCount).toBe(false);
+      if (!(after.components.astroturfPenalty > before.components.astroturfPenalty)) {
         expect(after.trustScore as number).toBeGreaterThanOrEqual(before.trustScore);
         checked += 1;
       }
@@ -423,17 +520,17 @@ describe("property: anonymous monotonicity (seeded fuzz)", () => {
     expect(checked).toBeGreaterThan(200);
   }, 60_000);
 
-  it("repeating every observation leaves the score unchanged, except that the uniformity minimum can start to apply", () => {
+  it("repeating every observation never lowers the score, unless the uniformity minimum starts to apply", () => {
     const rand = mulberry32(7);
     for (let trial = 0; trial < 300; trial++) {
       const corpus = randomCorpus(rand);
       const before = assess(corpus);
       if (before.trustScore === null) continue;
       const after = assess([...corpus, ...corpus.map((s) => ({ ...s, id: `${s.id}-copy` }))]);
-      if (before.eligibleSignalCount >= CONFIG.astroturf.minSignalsForUniformCheck) {
-        expect(after.trustScore).toBe(before.trustScore);
-        expect(after.components).toEqual(before.components);
-      } else if (after.trustScore !== before.trustScore) {
+      // Shares, the weighted mean and the weighted variance are unchanged; every source type's own weight doubles.
+      expect(after.components.consensus).toBe(before.components.consensus);
+      expect(after.components.volume).toBeGreaterThanOrEqual(before.components.volume);
+      if ((after.trustScore as number) < before.trustScore) {
         expect(after.flags.uniformSentiment && !before.flags.uniformSentiment).toBe(true);
       }
     }
