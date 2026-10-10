@@ -96,8 +96,10 @@ export function recencyDecay(ageDays: number, halfLifeDays: number): number {
 
 /**
  * Pull a weighted mean toward `prior` by shrinkage strength `dial`, expressed
- * in "phantom prior signals": the result is as if `dial` average-credibility
- * signals had already voted for `prior`.
+ * in "phantom prior signals": the result is as if `dial` signals of weight 1.0
+ * had already voted for `prior`. Weights are on that absolute scale, so
+ * multiplying every weight by `k` has the same effect as dividing `dial` by
+ * `k`: the scale of your weights is part of your configuration.
  *
  *   shrunk = (weightedSum + dial * prior) / (totalWeight + dial)
  *
@@ -160,8 +162,8 @@ export interface TrustDial {
  * | `strict` | 12 | Needs deep, credible evidence before a score stands on its own. |
  *
  * `C` is the number of "phantom prior signals" passed to
- * {@link shrinkTowardPrior}: with `C = 4`, four average-credibility signals
- * that all said `prior` are mixed in before the real evidence. The object and
+ * {@link shrinkTowardPrior}: with `C = 4`, four signals of weight 1.0 that
+ * all said `prior` are mixed in before the real evidence. The object and
  * every preset in it are deep-frozen. These values are illustrative starting
  * points, not calibrated for any domain; pass a raw number wherever a dial is
  * accepted to use your own strength.

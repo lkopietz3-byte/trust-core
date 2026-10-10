@@ -53,6 +53,7 @@ import {
   show,
   snapshotArray,
   snapshotWeightMap,
+  usableAgeDays,
 } from "../shared/internal.js";
 
 export { TRUST_DIALS, type TrustDial, type TrustDialPreset } from "../shared/types.js";
@@ -251,18 +252,32 @@ export function reputationFactor(reputation: number | null, curve: ReputationCur
 }
 
 /**
- * Age in days of a signal's `occurredAt`, falling back to a configured age
- * when unknown.
+ * Age in days of a signal's `occurredAt`, falling back to the configured
+ * `missingDateAgeDays` when there is no usable date. A date up to one day
+ * after `asOf` (clock skew, or a date-only stamp from a zone ahead of UTC)
+ * counts as age 0. A date further in the future is not usable: it gets the
+ * missing-date age, never full recency, so a mistyped or forged future date
+ * cannot make a signal look perfectly fresh.
  *
  * @throws TypeError if `occurredAt` (when not `null`) or `asOf` is not a
  *   valid ISO 8601 timestamp (an invalid one would otherwise silently
  *   produce a `NaN` age via `Date.parse`).
  */
 export function signalAgeDays(occurredAt: string | null, asOf: string, recency: RecencyCurve): number {
+  return usableSignalAge(occurredAt, asOf, recency.missingDateAgeDays).age;
+}
+
+/** The scored age, and whether it came from a usable date (not missing, not in the future). */
+function usableSignalAge(
+  occurredAt: string | null,
+  asOf: string,
+  missingDateAgeDays: number,
+): { age: number; dated: boolean } {
   checkTimestamp(asOf, "asOf");
-  if (occurredAt === null) return recency.missingDateAgeDays;
+  if (occurredAt === null) return { age: missingDateAgeDays, dated: false };
   checkTimestamp(occurredAt, "occurredAt");
-  return Math.max(0, daysBetween(occurredAt, asOf));
+  const age = usableAgeDays(daysBetween(occurredAt, asOf));
+  return age === null ? { age: missingDateAgeDays, dated: false } : { age, dated: true };
 }
 
 /**
@@ -299,11 +314,11 @@ function evaluateSignal(
   const source = lookupWeight(config.sourceWeights, signal.source, "source");
   const proof = lookupWeight(config.proofWeights, signal.proof, "proof");
   const reputation = reputationFactor(signal.reputation, config.reputation);
-  const age = signalAgeDays(signal.occurredAt, asOf, config.recency);
+  const { age, dated } = usableSignalAge(signal.occurredAt, asOf, config.recency.missingDateAgeDays);
   const recency = recencyDecay(age, config.recency.halfLifeDays);
   return {
     weight: assertFinite(tier * source * proof * reputation * recency, `weight of signal ${show(signal.id)}`),
-    ageDays: signal.occurredAt === null ? null : age,
+    ageDays: dated ? age : null,
   };
 }
 
@@ -344,7 +359,7 @@ export interface SignalContribution {
   proof: string;
   /** The signal's final weight: tier x source x proof x reputation x recency. `0` means it counted for nothing. */
   weight: Weight;
-  /** Age in days at `now`, or `null` when the signal had no `occurredAt`. */
+  /** Age in days at `now`, or `null` when the signal had no usable date: no `occurredAt`, or one more than a day after `now` (scored with `missingDateAgeDays`). */
   ageDays: number | null;
 }
 
@@ -356,7 +371,11 @@ export interface EntityScore {
   raw: number | null;
   /** The baseline the score was shrunk toward, as passed in. */
   prior: number;
-  /** Effective sample size — sum of signal weights, not a raw count. */
+  /**
+   * Effective sample size — sum of signal weights, not a raw count. Weights are
+   * on an absolute scale where 1.0 is one reference signal, so scaling every
+   * configured weight by `k` scales `nEff` by `k` (see README, "Weight scale").
+   */
   nEff: number;
   /** How many signals were submitted (including any that carried zero weight). */
   signalCount: number;
@@ -474,34 +493,59 @@ export function scoreEntity(
   };
 }
 
+const CONFIDENCE_LEVELS: readonly string[] = ["high", "moderate", "thin", "insufficient"];
+
 /**
  * Combine several already-scored dimensions (e.g. quality, reliability,
  * communication) into one composite using caller-supplied weights.
- * Dimensions with a missing or non-positive weight are excluded. Returns 0
- * if no dimension has a positive weight. `weights` is looked up with
- * `Object.hasOwn` so a prototype-chain dimension name is treated as missing
- * (weight 0) rather than resolving to an inherited, non-numeric value.
+ * Dimensions with a missing or non-positive weight are excluded. `weights` is
+ * looked up with `Object.hasOwn` so a prototype-chain dimension name is
+ * treated as missing (weight 0) rather than resolving to an inherited,
+ * non-numeric value.
  *
- * @throws TypeError if `scores` or `weights` is not a plain object.
- * @throws RangeError if a weight present in `weights` is `NaN` or infinite.
+ * Returns `null`, not a number, when the composite would not be measured:
+ * when no dimension has a positive weight, or when any positively weighted
+ * dimension's `confidence.level` is `"insufficient"`. An insufficient
+ * dimension's `score` is the bare prior, and averaging it in would present an
+ * assumption as a measurement. Handle `null` before sorting or comparing
+ * (JavaScript's `<` and `-` treat it as `0`).
+ *
+ * @throws TypeError if `scores` or `weights` is not a plain object, or a
+ *   dimension is not an object with a `confidence` object whose `level` is a
+ *   string.
+ * @throws RangeError if a weight present in `weights` is `NaN` or infinite, a
+ *   dimension's `score` is not in `[0, 100]`, or its `confidence.level` is not
+ *   a known level.
  */
 export function composeDimensions(
   scores: Record<string, EntityScore>,
   weights: Record<string, number>,
-): number {
+): number | null {
   checkPlainRecord(scores, "scores");
   checkPlainRecord(weights, "weights");
   const numerators: number[] = [];
   const denominators: number[] = [];
+  let unmeasured = false;
   for (const [key, entry] of Object.entries(scores)) {
     const w = hasOwn(weights, key) ? weights[key]! : 0;
     checkNumber(w, `weights[${show(key)}]`, {});
     const dimension = checkRecord(entry, `scores[${show(key)}]`);
     const dimensionScore = checkNumber(dimension.score, `scores[${show(key)}].score`, { min: 0, max: 100 });
+    const { level } = checkRecord(dimension.confidence, `scores[${show(key)}].confidence`);
+    if (typeof level !== "string") {
+      throw new TypeError(`scores[${show(key)}].confidence.level must be a string (got ${show(level)})`);
+    }
+    if (!CONFIDENCE_LEVELS.includes(level)) {
+      throw new RangeError(
+        `scores[${show(key)}].confidence.level must be one of ${CONFIDENCE_LEVELS.join(", ")} (got ${show(level)})`,
+      );
+    }
     if (w <= 0) continue;
+    if (level === "insufficient") unmeasured = true;
     numerators.push(assertFinite(w * dimensionScore, `weighted score of dimension ${show(key)}`));
     denominators.push(w);
   }
+  if (unmeasured) return null;
   const den = exactSum(denominators);
-  return den > 0 ? clamp(exactSum(numerators) / den, 0, 100) : 0;
+  return den > 0 ? clamp(exactSum(numerators) / den, 0, 100) : null;
 }
