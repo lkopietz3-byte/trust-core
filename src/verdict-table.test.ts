@@ -464,6 +464,18 @@ describe("verdict table: review round 3 (age and breadth, config coupling, flag 
   });
 });
 
+describe("verdict table: final numeric edges", () => {
+  it("a source type exactly at half the full-count weight is counted despite roundoff", () => {
+    // 0.85 x 0.0375 + 0.85 x 0.2125 is 0.2125 (half of 0.425) exactly, but sums to a hair under in floating point.
+    const config = resolveAnonymousConfig({ sourceWeights: { a: 0.85, b: 0.85, c: 0.85 } });
+    const split = ["a", "b", "c"].flatMap((s) => [0.0375, 0.2125].map((confidence) => obs(s, 0.3, { confidence, publishedAt: NOW })));
+    const whole = ["a", "b", "c"].map((s) => obs(s, 0.3, { confidence: 0.25, publishedAt: NOW }));
+    expect(assess(whole, config).sourceCount).toBe(3);
+    expect(assess(split, config).sourceCount).toBe(3);
+    expect(assess(split, config).confidence.level).toBe("moderate");
+  });
+});
+
 describe("verdict table: identified mode", () => {
   const config = EXAMPLE_IDENTIFIED_CONFIG;
 
@@ -521,6 +533,17 @@ describe("verdict table: identified mode", () => {
     const b = composeDimensions({ quality, reliability: above }, w) as number;
     expect(Math.abs(a - b)).toBeLessThan(0.5);
     expect(composeDimensionsDetailed({ quality, reliability: below }, w).measured).toEqual(["quality", "reliability"]);
+  });
+
+  it("composeDimensions never reports null while a dimension is listed as measured (tiny weights)", () => {
+    const base = scoreEntity(Array.from({ length: 12 }, (_, i) => known(`m${i}`, 40)), config, { now: NOW, prior: 50 });
+    const thin = { ...base, nEff: 0.1 }; // coverage 0.4
+    const alone = composeDimensionsDetailed({ a: thin }, { a: Number.MIN_VALUE });
+    expect(alone.measured).toEqual(["a"]);
+    expect(alone.score).toBe(base.score);
+    const mixed = composeDimensionsDetailed({ a: thin, b: base }, { a: Number.MIN_VALUE, b: 1 });
+    expect(mixed.score).not.toBeNull();
+    for (const result of [alone, mixed]) expect(result.score === null).toBe(result.measured.length === 0);
   });
 
   it("P2: a single near-weightless signal barely moves the composite", () => {

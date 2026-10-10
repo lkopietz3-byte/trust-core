@@ -77,7 +77,8 @@ yet.
   flag is now true exactly when its discount is above 0.
 - **Roundoff no longer decides a source count.** An effective count of
   `1.9999999999999998` was floored, dropping a source type and flagging concentration.
-  Near-integer sums are snapped first.
+  Near-integer sums are snapped first, and a source type a roundoff hair under the half-count
+  cutoff (0.49999999999999994) is counted.
 - **Overriding a shipped source type with a case variant works.**
   `resolveAnonymousConfig({ sourceWeights: { Forum: 1 } })` threw because the default
   `forum` was kept; an override key now replaces the default with the same normalized label.
@@ -119,7 +120,9 @@ These scores move on the example configuration. Anyone who stores, thresholds or
   either is missing or invalid. A dimension left out changes what the composite averages,
   so a vendor with no reliability data can outrank one measured as mediocre.
 - **New: `composeDimensionsDetailed(scores, weights, options?)`** returns
-  `{ score, measured, unmeasured }`, with a `minEffectiveSampleSize` option.
+  `{ score, measured, unmeasured }`, with a `minEffectiveSampleSize` option. Weights are
+  divided by the largest before scaling, and `score` is `null` exactly when `measured` is
+  empty (a tiny weight such as `Number.MIN_VALUE` no longer underflows into a `null` score).
 - **New config field: `fullCountWeight`** (optional; `undefined` selects 0.425). It is on the
   same scale as `sourceWeights` x `confidence`.
 - A `sourceWeights` map with two keys that are the same source type after trimming and

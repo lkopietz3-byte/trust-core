@@ -413,8 +413,17 @@ const COUNTED_SOURCE_FRACTION = 0.5;
  * the last bit. Monotone: it never reorders two values.
  */
 function snapNearInteger(value: number): number {
-  const nearest = Math.round(value);
-  return Math.abs(value - nearest) <= 1e-9 * Math.max(1, Math.abs(value)) ? nearest : value;
+  return snapTo(value, Math.round(value));
+}
+
+/** `value` snapped onto `target` when roundoff left it within a relative 1e-9 of it. */
+function snapTo(value: number, target: number): number {
+  return Math.abs(value - target) <= 1e-9 * Math.max(1, Math.abs(target)) ? target : value;
+}
+
+/** `value >= threshold`, treating a value a roundoff hair under the threshold as reaching it. */
+function atLeast(value: number, threshold: number): boolean {
+  return snapTo(value, threshold) >= threshold;
 }
 
 /** The effective source-type count at which `diversity` reaches 1. */
@@ -683,7 +692,7 @@ function countSourceTypes(
   let counted = 0;
   for (const terms of bySource.values()) {
     const part = Math.min(1, snapNearInteger(exactSum(terms) / fullCount));
-    if (part >= COUNTED_SOURCE_FRACTION) counted += 1;
+    if (atLeast(part, COUNTED_SOURCE_FRACTION)) counted += 1;
     parts.push(part);
   }
   return { effectiveSources: snapNearInteger(exactSum(parts)), sourceCount: Math.max(1, counted) };
@@ -737,7 +746,7 @@ function computeAstroturfPenalty(x: {
   const concentration = rules.concentrationPenalty * concentrationShare;
 
   let uniformStrength = 0;
-  if (x.effectiveObservations >= rules.minSignalsForUniformCheck) {
+  if (atLeast(x.effectiveObservations, rules.minSignalsForUniformCheck)) {
     const mean = x.meanSentiment;
     const variance =
       exactSum(x.sentiments.map((s, i) => (x.weights[i] as number) * (s - mean) ** 2)) / x.totalWeight;

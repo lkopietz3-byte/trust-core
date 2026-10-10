@@ -523,7 +523,7 @@ export interface ComposedDimensions {
   score: number | null;
   /** Positively weighted dimensions that carry some weight in `score` (any evidence at all), sorted by name. */
   measured: string[];
-  /** Positively weighted dimensions with no evidence (`"insufficient"`, nEff 0), which carry weight 0, sorted by name. Dimensions with no positive weight are in neither list. */
+  /** Positively weighted dimensions that carry weight 0 after scaling (no evidence: `"insufficient"` or nEff 0, or a scaled weight too small to represent), sorted by name. Dimensions with no positive weight are in neither list. `score` is `null` exactly when `measured` is empty. */
   unmeasured: string[];
 }
 
@@ -575,10 +575,9 @@ export function composeDimensionsDetailed(
       minEvidence = checkNumber(minEffectiveSampleSize, "options.minEffectiveSampleSize", { min: 0 });
     }
   }
-  const numerators: number[] = [];
-  const denominators: number[] = [];
-  const measured: string[] = [];
+  const candidates: { key: string; w: number; coverage: number; score: number }[] = [];
   const unmeasured: string[] = [];
+  let maxWeight = 0;
   for (const [key, entry] of Object.entries(scores)) {
     const w = hasOwn(weights, key) ? weights[key]! : 0;
     checkNumber(w, `weights[${show(key)}]`, {});
@@ -600,9 +599,25 @@ export function composeDimensionsDetailed(
       unmeasured.push(key);
       continue;
     }
+    assertFinite(w * dimensionScore, `weighted score of dimension ${show(key)}`);
+    candidates.push({ key, w, coverage, score: dimensionScore });
+    if (w > maxWeight) maxWeight = w;
+  }
+  // Weights are divided by the largest one before coverage is applied, so a
+  // tiny positive weight does not underflow to 0. One that still scales to 0
+  // carries no weight and is reported as unmeasured, so `score` is null
+  // exactly when `measured` is empty.
+  const numerators: number[] = [];
+  const denominators: number[] = [];
+  const measured: string[] = [];
+  for (const { key, w, coverage, score } of candidates) {
+    const scaled = (w / maxWeight) * coverage;
+    if (!(scaled > 0)) {
+      unmeasured.push(key);
+      continue;
+    }
     measured.push(key);
-    const scaled = w * coverage;
-    numerators.push(assertFinite(scaled * dimensionScore, `weighted score of dimension ${show(key)}`));
+    numerators.push(scaled * score);
     denominators.push(scaled);
   }
   const den = exactSum(denominators);
