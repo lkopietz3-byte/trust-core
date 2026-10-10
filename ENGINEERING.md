@@ -26,6 +26,24 @@
   observation whose effective weight (credibility x confidence x recency decay)
   is 0 (anonymous) contributes nothing to any output. With no eligible evidence,
   `confidence.level` is `"insufficient"` with a `reason`.
+- **Labels and shares (anonymous).** Source labels are compared trimmed and
+  case-folded. A source type counts toward the effective source count in full
+  from a 5% share of the total effective weight and in proportion below it, so
+  a near-weightless observation cannot add a source type.
+- **Confirming evidence (anonymous).** A confirming observation (sentiment at
+  or above the weighted mean, published at `now`) never lowers `trustScore`
+  except through a visible pattern signal: a larger `astroturfPenalty` or a
+  smaller `volume`. No discount switches on at a cliff: concentration ramps
+  over one source type, uniformity ramps quadratically from its thresholds.
+  The positive composite is capped at 1 before the discount is subtracted.
+- **Future dates fail closed.** A timestamp more than one day after `now` is
+  scored as undated (`missingDateAgeDays`), never as perfectly fresh.
+- **No bare prior as a measurement.** `composeDimensions` returns `null` when
+  no dimension has a positive weight or a weighted dimension is
+  `"insufficient"`.
+- **Verdict table.** `src/verdict-table.test.ts` pins named review sets
+  (flags, ordering, confidence) on the example configs. A change that moves a
+  verdict updates that table and the CHANGELOG together.
 - **Stable order.** `contributions` ties are broken by id, tier, source, proof,
   then age, so input order never changes the result.
 - **Immutability.** `EXAMPLE_IDENTIFIED_CONFIG`, `EXAMPLE_ANONYMOUS_CONFIG`,
