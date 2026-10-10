@@ -8,8 +8,8 @@ makes a previously accepted input throw or return a different result bumps the m
 
 ## [Unreleased]
 
-A fix pass from a verdict hunt on realistic review sets, plus two independent reviews of
-that pass. Anonymous scores change for many corpora, `composeDimensions` returns
+A fix pass from a verdict hunt on realistic review sets, plus three rounds of independent
+review. Anonymous scores change for many corpora, `composeDimensions` returns
 `number | null`, and future-dated evidence is scored differently. `composeDimensions`'s
 return type is a breaking API change, so **the next release must be 0.3.0**. Not released
 yet.
@@ -38,10 +38,20 @@ yet.
 - **A near-weightless decoy no longer defeats the discounts.** One extra observation with
   confidence 0.001 from a second source type lifted a 30-post single-forum corpus from 38 to
   67, and three near-weightless dissenting observations cleared the uniformity discount on
-  20 identical 5-star reviews (70 to 84). A source type counts in full only once its own
-  effective weight reaches the full-count weight (half the largest configured credibility:
-  0.425 on the example config), in proportion below that, and the uniformity mean and
-  variance use the same weights as consensus. Both now score 38 and 71.
+  20 identical 5-star reviews (70 to 84). A source type counts in full only once its summed
+  credibility x confidence reaches the new `fullCountWeight` setting (default 0.425), in
+  proportion below that, and the uniformity mean and variance use the same weights as
+  consensus. Both now score 38 and 71.
+- **Breadth does not depend on age.** Source types are counted on credibility x confidence
+  without recency decay, so old or undated honest mentions count for breadth like fresh
+  ones (their age still lowers `recency`). Six platforms with one 3-year-old post each:
+  76 on 0.2.0, 49 in an intermediate version of this fix, 75 now; 40 marketplace reviews
+  plus one old mention on each of five other platforms: 86, 77, 85. A ring's fresh
+  decoys gain nothing from this (it scores 90 either way).
+- **Unused source types in the config no longer change scores.** The full-count weight was
+  derived from the largest credibility in `sourceWeights`, so adding an unused
+  `verified: 2.0` key dropped four fresh posts on four platforms from 76 to 65. It is now
+  the explicit `fullCountWeight` setting.
 - **No uniformity cliff, and no free pass just above it.** The uniformity discount switched
   fully on at `mean > 0.85 && variance < 0.02`, so 4.92 stars (23 five-star and 2 four-star
   reviews) scored 68 against 78 for 4.60 stars. It now ramps in linearly over 0.05 of mean
@@ -58,7 +68,13 @@ yet.
   stamp from a zone ahead of UTC) still counts as age 0.
 - **`composeDimensions` no longer presents a bare prior as measured.** A dimension with no
   evidence (`score` equal to the prior) was averaged in as if measured, and no positive
-  weight returned `0`.
+  weight returned `0`. Each dimension's weight is now scaled by `min(1, nEff / 0.25)`, so a
+  near-bare dimension counts for little and its influence grows smoothly (an intermediate
+  version dropped dimensions below 0.25 outright, so a second confirming review moved a
+  composite from 82.71 to 79.22 in one step).
+- **Flags tell the truth.** With `concentrationPenalty: 0`, a single observation reported
+  `lowSourceCount: true` and an explanation claiming concentration lowered the score; each
+  flag is now true exactly when its discount is above 0.
 - **Roundoff no longer decides a source count.** An effective count of
   `1.9999999999999998` was floored, dropping a source type and flagging concentration.
   Near-integer sums are snapped first.
@@ -96,13 +112,16 @@ These scores move on the example configuration. Anyone who stores, thresholds or
   row has `ageDays: null`, and `signalAgeDays` returns `missingDateAgeDays` for it. In
   `anonymous`, the explanation adds "N observation(s) dated after the assessment time ... scored
   as undated."
-- **`composeDimensions` returns `number | null` (breaking).** It leaves out positively
-  weighted dimensions that are `"insufficient"` or whose `nEff` is below 0.25, renormalizes
-  over the rest, and returns `null` only when no weighted dimension is measured (it
+- **`composeDimensions` returns `number | null` (breaking).** It scales each positively
+  weighted dimension's weight by `min(1, nEff / 0.25)`, gives `"insufficient"` dimensions
+  weight 0, renormalizes, and returns `null` only when no weighted dimension is measured (it
   returned `0`). It now reads each dimension's `nEff` and `confidence.level` and throws if
-  either is missing or invalid.
+  either is missing or invalid. A dimension left out changes what the composite averages,
+  so a vendor with no reliability data can outrank one measured as mediocre.
 - **New: `composeDimensionsDetailed(scores, weights, options?)`** returns
   `{ score, measured, unmeasured }`, with a `minEffectiveSampleSize` option.
+- **New config field: `fullCountWeight`** (optional; `undefined` selects 0.425). It is on the
+  same scale as `sourceWeights` x `confidence`.
 - A `sourceWeights` map with two keys that are the same source type after trimming and
   case-folding, with different weights, now throws `RangeError`.
 - Explanation text: `from N distinct source types` is now `from N effective source types`,
@@ -125,6 +144,10 @@ These scores move on the example configuration. Anyone who stores, thresholds or
   comment used to say it could be sorted without a special case.
 - Observations are not deduplicated (`id` is never read); resubmitting a review counts it
   twice.
+- Low but nonzero variance is discounted lightly (the variance term is squared): praise
+  alternating 0.8 and 1.0 scores 88 against 78 for identical 0.9. A linear variance term
+  would close the gap but would push honest near-perfect sets below 4.60-star sets, so it
+  is left as a documented gap.
 - Inputs are not rescaled: a 1-5 rating passed as a 0-100 `value`, or a `[0, 1]` model score
   passed as a `[-1, 1]` sentiment, is accepted and read on the wrong scale.
 - Honest limits say plainly how easy the discounts are to clear: one post with real weight

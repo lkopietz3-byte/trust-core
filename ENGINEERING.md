@@ -29,11 +29,13 @@
 - **Labels and source counts (anonymous).** Source labels are compared
   trimmed and case-folded, in signals and in `sourceWeights` (an override key
   replaces a default with the same normalized label). A source type counts in
-  full once its own effective weight reaches the full-count weight (half the
-  largest configured credibility) and in proportion below it, so a
-  near-weightless observation cannot add a source type and evidence added to
-  one source type never makes another count for less. Near-integer sums are
-  snapped before they decide a count or threshold.
+  full once its summed credibility x confidence (no recency) reaches the
+  explicit `fullCountWeight` (default 0.425) and in proportion below it, so a
+  near-weightless observation cannot add a source type, age lowers recency but
+  never breadth, unused config keys change nothing, and evidence added to one
+  source type never makes another count for less. Near-integer sums are
+  snapped before they decide a count or threshold. A flag is true exactly when
+  its discount is above 0. No caller-sized collection is spread into a call.
 - **Confirming evidence (anonymous).** An observation with sentiment at or
   above the weighted mean that is at least as fresh as the corpus average
   (e.g. published at `now`), from any source type, never lowers `trustScore`
@@ -43,11 +45,11 @@
   capped at 1 before the discount is subtracted.
 - **Future dates fail closed.** A timestamp more than one day after `now` is
   scored as undated (`missingDateAgeDays`), never as perfectly fresh.
-- **No bare prior as a measurement.** `composeDimensions` leaves out
-  positively weighted dimensions that are `"insufficient"` or below the
-  minimum `nEff` (0.25 by default), renormalizes over the rest, and returns
-  `null` only when nothing is measured; `composeDimensionsDetailed` lists
-  which dimensions were left out.
+- **No bare prior as a measurement.** `composeDimensions` scales each
+  positively weighted dimension's weight by `min(1, nEff / 0.25)` (smooth, no
+  cliff), so an `"insufficient"` dimension gets weight 0; it renormalizes and
+  returns `null` only when nothing is measured. `composeDimensionsDetailed`
+  lists the measured and unmeasured dimensions.
 - **Verdict table.** `src/verdict-table.test.ts` pins named review sets
   (flags, ordering, confidence) on the example configs. A change that moves a
   verdict updates that table and the CHANGELOG together.
