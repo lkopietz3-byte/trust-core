@@ -37,8 +37,9 @@ describe("each component enters the composite with its own weight", () => {
   it("diversity", () => {
     const config = withConfig({ weights: { consensus: 0, diversity: 0.5, volume: 0, recency: 0 } });
     const result = assess(twoOfThree, config);
-    expect(result.components.diversity).toBeCloseTo(2 / 3, 12);
-    expect(result.trustScore).toBe(Math.round(100 * 0.5 * (2 / 3)));
+    // Two source types (shares 2/3 and 1/3, both above the 5% floor) against the reference of six.
+    expect(result.components.diversity).toBeCloseTo(2 / 6, 12);
+    expect(result.trustScore).toBe(Math.round(100 * 0.5 * (2 / 6)));
   });
 
   it("volume", () => {
@@ -149,11 +150,11 @@ describe("explanation thresholds at their exact boundaries", () => {
 
   it("the few-source-types sentence needs diversity strictly below 0.4", () => {
     const five = (n: number): AnonymousSignal[] => Array.from({ length: 5 }, (_, i) => sig(["a", "b", "c"][i % n] as string, 0.1));
-    expect(assess(five(2)).components.diversity).toBe(0.4);
-    expect(text(five(2))).not.toContain("Few distinct source types");
+    expect(assess(five(3)).components.diversity).toBe(0.5);
+    expect(text(five(3))).not.toContain("few distinct source types");
     const six = Array.from({ length: 6 }, (_, i) => sig(["a", "b"][i % 2] as string, 0.1));
     expect(assess(six).components.diversity).toBeCloseTo(1 / 3, 12);
-    expect(text(six)).toContain("Few distinct source types relative to the number of observations; treat as uncertain.");
+    expect(text(six)).toContain("The evidence spans few distinct source types; treat as uncertain.");
   });
 
   it("the recency sentence needs recency strictly below 0.4", () => {

@@ -171,13 +171,13 @@ describe("assessAuthenticity — recency and confidence", () => {
     expect(assessAuthenticity(high, config, { now: NOW }).confidence.level).toBe("high");
   });
 
-  it("does not apply the astroturf check below the minimum-signal floor", () => {
+  it("does not apply the uniformity check below the minimum-signal floor, but concentration applies at any count", () => {
     const tiny = [sig("forum", 1.0), sig("forum", 1.0)]; // 2 signals, uniform, single source
     const result = assessAuthenticity(tiny, config, { now: NOW });
 
-    expect(result.flags.lowSourceCount).toBe(false);
+    expect(result.flags.lowSourceCount).toBe(true);
     expect(result.flags.uniformSentiment).toBe(false);
-    expect(result.components.astroturfPenalty).toBe(0);
+    expect(result.components.astroturfPenalty).toBe(config.astroturf.concentrationPenalty);
   });
 });
 
@@ -207,15 +207,17 @@ describe("README worked example reproduces exactly", () => {
     ];
     const verdict = assessAuthenticity(readmeSignals, readmeConfig, { now: "2026-08-01T00:00:00Z" });
 
-    expect(verdict.trustScore).toBe(83);
+    // Three observations from three source types: diversity is 3 of a reference 6 (it was 1 when diversity
+    // divided by the observation count, which let one observation earn full diversity).
+    expect(verdict.trustScore).toBe(71);
     expect(verdict.components.consensus).toBeCloseTo(0.8288923795049216, 9);
-    expect(verdict.components.diversity).toBe(1);
+    expect(verdict.components.diversity).toBe(0.5);
     expect(verdict.components.volume).toBeCloseTo(0.5404763088546395, 9);
     expect(verdict.components.recency).toBeCloseTo(0.9380486285411919, 9);
     expect(verdict.components.astroturfPenalty).toBe(0);
     expect(verdict.confidence).toEqual({ level: "moderate", effectiveSampleSize: 3 });
     expect(verdict.explanation).toBe(
-      "Heuristic score 83/100 from 3 distinct source types (independence not verified). Sentiment is strongly positive.",
+      "Heuristic score 71/100 from 3 distinct source types (independence not verified). Sentiment is strongly positive.",
     );
     expect(verdict.eligibleSignalCount).toBe(3);
   });

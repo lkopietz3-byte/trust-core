@@ -127,7 +127,8 @@ describe("ineligible observations are ignored by every component", () => {
     });
     const two = [sig("forum", 0.97), sig("forum", 0.97)];
     const padded = [...two, sig("forum", 0.97, { confidence: 0 }), sig("unknown", 0.97), sig("muted", 0.97)];
-    expect(assess(padded, strict).flags).toEqual({ lowSourceCount: false, uniformSentiment: false });
+    // Two eligible observations stay under the uniformity minimum; the concentration check applies at any count.
+    expect(assess(padded, strict).flags).toEqual({ lowSourceCount: true, uniformSentiment: false });
     expect(assess(padded, strict)).toEqual({ ...assess(two, strict), signalCount: 5 });
   });
 
@@ -192,8 +193,13 @@ describe("property: ineligible observations contribute nothing (seeded)", () => 
       const all = shuffle([...eligible, ...Array.from({ length: Math.floor(rand() * 4) }, randomIneligible)]);
       const result = assess(all);
       const distinct = new Set(eligible.map((s) => s.source)).size;
-      expect(result.confidence.effectiveSampleSize).toBe(distinct);
-      expect(result.sourceCount).toBe(distinct);
+      // A source type counts in full only from a 5% weight share, so the count is
+      // at most the number of distinct labels, at least 1, and set by the
+      // eligible observations alone.
+      expect(result.confidence.effectiveSampleSize).toBe(result.sourceCount);
+      expect(result.sourceCount).toBe(eligible.length === 0 ? 0 : assess(eligible).sourceCount);
+      expect(result.sourceCount).toBeLessThanOrEqual(distinct);
+      if (eligible.length > 0) expect(result.sourceCount).toBeGreaterThanOrEqual(1);
       expect(result.eligibleSignalCount).toBe(eligible.length);
       expect(result.signalCount).toBe(all.length);
       expect(result.confidence.level === "insufficient").toBe(eligible.length === 0);
@@ -245,7 +251,7 @@ describe("explanations describe patterns and uncertainty only (TC-004)", () => {
   it("low diversity says so in terms of source types and uncertainty", () => {
     const repeated = Array.from({ length: 6 }, () => sig("forum", 0.5));
     expect(assess(repeated).explanation).toContain(
-      "Few distinct source types relative to the number of observations; treat as uncertain.",
+      "The evidence spans few distinct source types; treat as uncertain.",
     );
   });
 
