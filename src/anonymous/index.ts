@@ -15,9 +15,20 @@
  *
  * Source labels are compared after trimming and case-folding, so `"forum"`,
  * `"Forum"` and `" forum "` are one source type. A source type counts in full
- * once it carries at least 5% of the total effective
- * weight, and in proportion below that, so a near-weightless observation
- * cannot add a source type.
+ * once its own effective weight reaches half of one fresh, fully confident
+ * observation from the most credible configured source type, and in
+ * proportion below that, so a near-weightless observation cannot add a source
+ * type. Because a source type's count depends only on its own weight,
+ * evidence added anywhere never makes another source type count for less.
+ *
+ * **When the score can drop.** Adding an observation never lowers
+ * `trustScore` when its sentiment is at or above the corpus's weighted mean
+ * sentiment and it is at least as fresh as the corpus on average (for
+ * example, published at `now`), from any source type, with one exception: it
+ * can raise the uniformity discount (identical praise is more uniform, and the
+ * uniformity check starts to apply once there are `minSignalsForUniformCheck`
+ * effective observations). An older observation lowers the average recency,
+ * and a less positive one lowers consensus.
  *
  * The pattern:
  *   - `volume`    — log-scaled effective count of source types (saturating,
@@ -25,8 +36,7 @@
  *   - `diversity` — effective count of source types against a reference of
  *                   six. It depends on how broad the evidence is, not on how
  *                   few observations there are, so one observation never gets
- *                   full diversity and more confirming observations never
- *                   lower it.
+ *                   full diversity and more observations never lower it.
  *   - `consensus` — recency- and confidence-weighted mean sentiment, with
  *                   each source type weighted by a caller-supplied
  *                   "localness"/credibility factor.
@@ -117,8 +127,8 @@ export interface AstroturfRules {
   /**
    * Effective source-type count at/under which the full concentration penalty
    * applies. Between this count and one more, the penalty ramps down linearly
-   * to 0, so a second source type carrying a sliver of the weight earns only a
-   * sliver of relief.
+   * to 0, so a second source type carrying a sliver of the full-count weight
+   * earns only a sliver of relief.
    */
   concentrationSourceCeiling: number;
   /** Full concentration penalty (at/under the ceiling). */
@@ -128,12 +138,14 @@ export interface AstroturfRules {
   /** Weighted sentiment variance below this threshold is a candidate for the uniformity penalty. */
   uniformVarianceThreshold: number;
   /**
-   * Largest uniformity penalty, reached at a weighted mean of 1 with zero
-   * variance. Past both thresholds it ramps in with the square of how far the
-   * corpus is past each one, so it starts at 0 at the thresholds (no cliff).
+   * Largest uniformity penalty, reached with zero variance and a weighted mean
+   * at least 0.05 past `uniformMeanThreshold`. It ramps in linearly over that
+   * 0.05 of mean and with the square of how far the variance is below its
+   * threshold, so it starts at 0 at the thresholds (no cliff) and identical
+   * praise from 0.9 up (with the example threshold) gets all of it.
    */
   uniformPenalty: number;
-  /** Minimum ELIGIBLE observation count before the uniformity check applies (avoids false positives on tiny n). The concentration check applies at any count. */
+  /** Minimum effective observation count before the uniformity check applies (avoids false positives on tiny n): an observation at or above the full-count weight counts as one, a lighter one in proportion. The concentration check applies at any count. */
   minSignalsForUniformCheck: number;
 }
 
@@ -263,6 +275,20 @@ function snapshotSourceWeights(map: unknown): Record<string, number> {
   return weights;
 }
 
+/**
+ * Merge a `sourceWeights` override over the defaults by normalized label: an
+ * override key replaces every default key that names the same source type
+ * (`{ Forum: 1 }` replaces the default `forum`). Two keys within the caller's
+ * own map that collide are still rejected by {@link snapshotSourceWeights}.
+ */
+function mergeSourceWeights(defaults: Record<string, number>, override: unknown): Record<string, unknown> {
+  if (override === undefined) return { ...defaults };
+  const record = checkPlainRecord(override, "sourceWeights");
+  const overridden = new Set(Object.keys(record).map(normalizeSourceLabel));
+  const kept = Object.entries(defaults).filter(([key]) => !overridden.has(normalizeSourceLabel(key)));
+  return { ...Object.fromEntries(kept), ...record };
+}
+
 /** Validate every section once, copy the validated values, and freeze the result. */
 function buildConfig(parts: Record<(typeof ANONYMOUS_CONFIG_KEYS)[number], unknown>): AnonymousConfig {
   return deepFreeze<AnonymousConfig>({
@@ -304,7 +330,7 @@ export function resolveAnonymousConfig(overrides?: Partial<AnonymousConfig>): An
   const { sourceWeights, weights, astroturfWeight, recency, volumeSaturation, astroturf, confidence } = record;
   const example = EXAMPLE_ANONYMOUS_CONFIG;
   return buildConfig({
-    sourceWeights: mergeSection(example.sourceWeights, sourceWeights, "sourceWeights"),
+    sourceWeights: mergeSourceWeights(example.sourceWeights, sourceWeights),
     weights: mergeSection(example.weights, weights, "weights"),
     astroturfWeight: astroturfWeight === undefined ? example.astroturfWeight : astroturfWeight,
     recency: mergeSection(example.recency, recency, "recency"),
@@ -344,17 +370,44 @@ function sourceWeightLookup(config: AnonymousConfig): (source: string) => number
 }
 
 /**
- * A source type counts in full toward the effective source-type count once it
- * carries at least this share (5%) of the corpus's total effective weight, and
- * in proportion below that (a 1% share counts as 0.2 of a source type). A
- * near-weightless observation therefore adds almost nothing, and a ring that
- * wants a second source type to count has to put real weight behind it, more
- * as the ring grows.
+ * The full-count weight, as a fraction of the largest configured credibility:
+ * a source type counts in full toward the effective source-type count once
+ * its own summed effective weight reaches this fraction of one fresh,
+ * fully confident observation from the most credible configured source type,
+ * and in proportion below that. With the example config that is 0.425, so one
+ * fresh forum post (0.77) counts in full and an observation at confidence
+ * 0.001 counts for 0.002 of a source type.
+ *
+ * It depends only on that source type's own weight, never on its share of the
+ * total, so evidence added to another source type can never make it count
+ * for less. It is relative to the configured credibilities, so scaling every
+ * `sourceWeights` value by the same factor changes nothing.
  */
-const SOURCE_SHARE_FLOOR = 0.05;
+const FULL_COUNT_FRACTION = 0.5;
+
+/** A source type at or above this fraction of the full-count weight is counted in `sourceCount`. */
+const COUNTED_SOURCE_FRACTION = 0.5;
+
+/**
+ * Snap a sum that floating-point roundoff left a hair off a whole number
+ * (`2.9999999999999996`) onto it, so a threshold or count is not decided by
+ * the last bit. Monotone: it never reorders two values.
+ */
+function snapNearInteger(value: number): number {
+  const nearest = Math.round(value);
+  return Math.abs(value - nearest) <= 1e-9 * Math.max(1, Math.abs(value)) ? nearest : value;
+}
 
 /** The effective source-type count at which `diversity` reaches 1. */
 const DIVERSITY_REFERENCE_SOURCES = 6;
+
+/**
+ * How far past `uniformMeanThreshold` the weighted mean must be for the full
+ * mean factor of the uniformity discount: 0.05 (or the distance to 1, if
+ * smaller). With the example threshold of 0.85, identical praise at 0.9 or
+ * above gets the full mean factor.
+ */
+const UNIFORM_MEAN_RAMP = 0.05;
 
 // ---------------------------------------------------------------------------
 // Authenticity assessment
@@ -390,12 +443,12 @@ export interface AuthenticityAssessment {
   trustScore: number | null;
   components: AuthenticityComponents;
   /**
-   * Effective number of source types among ELIGIBLE observations, rounded
-   * down: labels are trimmed and case-folded, and a source type counts in full
-   * only once it carries at least 5% of the total effective weight (in
-   * proportion below that). At least 1 whenever any observation is eligible.
-   * The source strings are caller-supplied labels; nothing verifies they are
-   * independent publishers.
+   * Counted source types among ELIGIBLE observations: labels are trimmed and
+   * case-folded, and a source type is counted once its own effective weight
+   * reaches half of the full-count weight (a quarter of one fresh, fully
+   * confident observation from the most credible configured source type). At
+   * least 1 whenever any observation is eligible. The source strings are
+   * caller-supplied labels; nothing verifies they are independent publishers.
    */
   sourceCount: number;
   /** How many observations were submitted (including ineligible ones). */
@@ -525,8 +578,12 @@ export function assessAuthenticity(
 
   // Every eligible weight is above 0, so the total is positive.
   const totalWeight = exactSum(weights);
-  const effectiveSources = effectiveSourceCount(labels, weights, totalWeight);
-  const sourceCount = Math.max(1, Math.floor(effectiveSources));
+  // Every configured credibility of an eligible observation is above 0, so this is too.
+  const fullCount = FULL_COUNT_FRACTION * Math.max(...Object.values(resolved.sourceWeights));
+  const { effectiveSources, sourceCount } = countSourceTypes(labels, weights, fullCount);
+  // The uniformity minimum counts observations the same way: one at the
+  // full-count weight or more counts as one, a lighter one in proportion.
+  const effectiveObservations = snapNearInteger(exactSum(weights.map((w) => Math.min(1, w / fullCount))));
 
   // Volume: log-saturating effective count of source types.
   const volume = clamp01(Math.log1p(effectiveSources) / Math.log1p(resolved.volumeSaturation));
@@ -551,6 +608,7 @@ export function assessAuthenticity(
     totalWeight,
     meanSentiment,
     effectiveSources,
+    effectiveObservations,
     rules: resolved.astroturf,
   });
 
@@ -581,12 +639,17 @@ export function assessAuthenticity(
 }
 
 /**
- * The effective number of source types: each normalized label adds
- * `min(1, share / SOURCE_SHARE_FLOOR)`, where `share` is its part of the total
- * effective weight. At least 1 (the shares sum to 1). Summed exactly, so the
- * result does not depend on the order labels were first seen.
+ * The effective number of source types, and how many are counted. Each
+ * normalized label adds `min(1, ownWeight / fullCount)`; `sourceCount` is the
+ * number of labels at or above half of that, and at least 1. Summed exactly
+ * and snapped, so the result does not depend on the order labels were first
+ * seen or on the last bit of a sum.
  */
-function effectiveSourceCount(labels: readonly string[], weights: readonly number[], totalWeight: number): number {
+function countSourceTypes(
+  labels: readonly string[],
+  weights: readonly number[],
+  fullCount: number,
+): { effectiveSources: number; sourceCount: number } {
   const bySource = new Map<string, number[]>();
   labels.forEach((label, i) => {
     const terms = bySource.get(label);
@@ -594,8 +657,13 @@ function effectiveSourceCount(labels: readonly string[], weights: readonly numbe
     else bySource.set(label, [weights[i] as number]);
   });
   const parts: number[] = [];
-  for (const terms of bySource.values()) parts.push(Math.min(1, exactSum(terms) / totalWeight / SOURCE_SHARE_FLOOR));
-  return exactSum(parts);
+  let counted = 0;
+  for (const terms of bySource.values()) {
+    const part = Math.min(1, snapNearInteger(exactSum(terms) / fullCount));
+    if (part >= COUNTED_SOURCE_FRACTION) counted += 1;
+    parts.push(part);
+  }
+  return { effectiveSources: snapNearInteger(exactSum(parts)), sourceCount: Math.max(1, counted) };
 }
 
 /** The documented outcome for a corpus with no eligible observation. */
@@ -623,13 +691,12 @@ function insufficientAssessment(submitted: number, config: AnonymousConfig): Aut
  *     observation count: one review from one source type is as concentrated as
  *     thirty, so the discount does not switch on as reviews accumulate.
  *   - uniformity: weighted sentiment is near-maximal with near-zero weighted
- *     variance, from `minSignalsForUniformCheck` eligible observations up. The
- *     penalty is `uniformPenalty x m^2 x v^2`, where `m` is how far the mean is
- *     past its threshold (0 at the threshold, 1 at a mean of 1) and `v` how far
- *     the variance is below its threshold (0 at the threshold, 1 at zero). It
- *     starts at 0 on both thresholds, so nudging a corpus across one cannot
- *     flip a ranking, and a near-weightless outlier cannot move the mean or
- *     variance.
+ *     variance, from `minSignalsForUniformCheck` effective observations up.
+ *     The penalty is `uniformPenalty x m x v^2`, where `m` is how far the mean
+ *     is past its threshold (0 at the threshold, 1 at 0.05 past it, or at 1)
+ *     and `v` how far the variance is below its threshold (0 at the threshold,
+ *     1 at zero). It starts at 0 on both thresholds, so there is no cliff, and
+ *     a near-weightless outlier cannot move the mean or variance.
  * Neither is a finding that any observation is fabricated. The caller passes
  * ELIGIBLE observations only, and there is at least one.
  */
@@ -639,6 +706,7 @@ function computeAstroturfPenalty(x: {
   totalWeight: number;
   meanSentiment: number;
   effectiveSources: number;
+  effectiveObservations: number;
   rules: AstroturfRules;
 }): { penalty: number; flags: AstroturfFlags } {
   const { rules } = x;
@@ -646,15 +714,15 @@ function computeAstroturfPenalty(x: {
   const concentration = rules.concentrationPenalty * concentrationShare;
 
   let uniformStrength = 0;
-  if (x.sentiments.length >= rules.minSignalsForUniformCheck) {
+  if (x.effectiveObservations >= rules.minSignalsForUniformCheck) {
     const mean = x.meanSentiment;
     const variance =
       exactSum(x.sentiments.map((s, i) => (x.weights[i] as number) * (s - mean) ** 2)) / x.totalWeight;
     if (mean > rules.uniformMeanThreshold && variance < rules.uniformVarianceThreshold) {
       // Both thresholds are crossed strictly, so both denominators are above 0.
-      const m = clamp01((mean - rules.uniformMeanThreshold) / (1 - rules.uniformMeanThreshold));
+      const m = clamp01((mean - rules.uniformMeanThreshold) / Math.min(UNIFORM_MEAN_RAMP, 1 - rules.uniformMeanThreshold));
       const v = clamp01(1 - variance / rules.uniformVarianceThreshold);
-      uniformStrength = m * m * v * v;
+      uniformStrength = m * v * v;
     }
   }
   const uniform = rules.uniformPenalty * uniformStrength;
@@ -675,7 +743,7 @@ function explain(x: {
 }): string {
   const parts: string[] = [];
   parts.push(
-    `Heuristic score ${x.trustScore}/100 from ${x.sourceCount} distinct source type${x.sourceCount === 1 ? "" : "s"} (independence not verified).`,
+    `Heuristic score ${x.trustScore}/100 from ${x.sourceCount} effective source type${x.sourceCount === 1 ? "" : "s"} (independence not verified).`,
   );
   if (x.components.consensus >= 0.7) parts.push("Sentiment is strongly positive.");
   else if (x.components.consensus <= 0.4) parts.push("Sentiment is lukewarm or negative.");

@@ -186,8 +186,8 @@ describe("explanation thresholds at their exact boundaries", () => {
   });
 
   it("uses the singular for one source type", () => {
-    expect(text([sig("a", 0.1)])).toContain("from 1 distinct source type (independence not verified)");
-    expect(text([sig("a", 0.1), sig("b", 0.1)])).toContain("from 2 distinct source types (independence not verified)");
+    expect(text([sig("a", 0.1)])).toContain("from 1 effective source type (independence not verified)");
+    expect(text([sig("a", 0.1), sig("b", 0.1)])).toContain("from 2 effective source types (independence not verified)");
   });
 });
 

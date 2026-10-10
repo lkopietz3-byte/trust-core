@@ -225,9 +225,9 @@ describe("explanations describe patterns and uncertainty only (TC-004)", () => {
 
   it("the base sentence calls the sources distinct types and says independence is not verified", () => {
     expect(assess(varied).explanation).toMatch(
-      /^Heuristic score \d+\/100 from 3 distinct source types \(independence not verified\)\./,
+      /^Heuristic score \d+\/100 from 3 effective source types \(independence not verified\)\./,
     );
-    expect(assess([sig("forum", 0.6), sig("forum", 0.5)]).explanation).toContain("from 1 distinct source type (independence");
+    expect(assess([sig("forum", 0.6), sig("forum", 0.5)]).explanation).toContain("from 1 effective source type (independence");
   });
 
   it("uniform near-maximal sentiment is described as a pattern in the numbers, never as planted or fabricated", () => {
