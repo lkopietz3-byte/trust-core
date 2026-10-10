@@ -8,15 +8,17 @@ makes a previously accepted input throw or return a different result bumps the m
 
 ## [Unreleased]
 
-A fix pass from a verdict hunt on realistic review sets. Anonymous scores change for many
-corpora, `composeDimensions` can return `null`, and future-dated evidence is scored
-differently, so the next release is a minor bump. Not released yet.
+A fix pass from a verdict hunt on realistic review sets, plus two independent reviews of
+that pass. Anonymous scores change for many corpora, `composeDimensions` returns
+`number | null`, and future-dated evidence is scored differently. `composeDimensions`'s
+return type is a breaking API change, so **the next release must be 0.3.0**. Not released
+yet.
 
 ### Fixed
 
 - **More confirming anonymous reviews no longer lower the score.** One forum review scored
   81, two scored 68, three 43; one review outranked thirty reviews over three source types.
-  Three causes, all fixed:
+  The causes, all fixed:
   - `diversity` divided by the observation count (`sourceCount / min(n, 6)`), so a single
     observation got full diversity and every confirming observation lowered it. It is now
     the effective source-type count over a fixed reference of six.
@@ -26,30 +28,46 @@ differently, so the next release is a minor bump. Not released yet.
   - Source labels that differ only in case or surrounding spaces (`"Forum"`, `" forum"`)
     were unlisted sources with weight 0. Labels, in signals and in `sourceWeights` keys, are
     now compared trimmed and case-folded.
+  - A source type now counts by its own effective weight, never by its share of the total,
+    so piling up reviews on one platform cannot make another platform count for less. With
+    a share-based count (an intermediate version of this fix), one aggregator post plus 40
+    forum posts scored 42 against 63 for one plus 8; it now scores the same at every size.
+    In a 3,000-case seeded fuzz of same-type confirming additions, the score went down 771
+    times on 0.2.0 and 121 times now, and every remaining case is the uniformity discount
+    rising (more identical praise is more uniform).
 - **A near-weightless decoy no longer defeats the discounts.** One extra observation with
   confidence 0.001 from a second source type lifted a 30-post single-forum corpus from 38 to
-  67 by adding a source type, and three near-weightless dissenting observations cleared the
-  uniformity discount on 20 identical 5-star reviews (70 to 84). A source type now counts in
-  full only from a 5% share of the total effective weight, in proportion below that, and the
-  uniformity mean and variance use the same weights as consensus.
-- **No uniformity cliff.** The uniformity discount switched fully on at
-  `mean > 0.85 && variance < 0.02`, so 4.92 stars (23 five-star and 2 four-star reviews)
-  scored 68 against 78 for 4.60 stars, and raising every sentiment from 0.84 to 0.86 cost 14
-  points. The discount now ramps in with the square of how far the corpus is past each
-  threshold: 4.92 stars scores 82, and only identical maximal praise gets the full penalty.
+  67, and three near-weightless dissenting observations cleared the uniformity discount on
+  20 identical 5-star reviews (70 to 84). A source type counts in full only once its own
+  effective weight reaches the full-count weight (half the largest configured credibility:
+  0.425 on the example config), in proportion below that, and the uniformity mean and
+  variance use the same weights as consensus. Both now score 38 and 71.
+- **No uniformity cliff, and no free pass just above it.** The uniformity discount switched
+  fully on at `mean > 0.85 && variance < 0.02`, so 4.92 stars (23 five-star and 2 four-star
+  reviews) scored 68 against 78 for 4.60 stars. It now ramps in linearly over 0.05 of mean
+  past the threshold and with the square of the variance margin: that 4.92-star set scores
+  82, and identical praise at 0.9 or above still gets the full discount (40 identical posts
+  at 0.9 over six source types score 78, as on 0.2.0, below an honest J-shaped set at 87).
 - **Weights summing above 1 no longer absorb the discount.** The positive composite was
   clamped after the penalty was subtracted, so with weights summing to 2.0 a flagged corpus
-  still scored 100. The composite is now capped at 1 before the discount, as the README's
-  "either is enough to discount the score" promised.
+  still scored 100. It is now capped at 1 before the discount (86), as the README's "either
+  is enough to discount the score" promised.
 - **Future-dated evidence no longer gets full recency.** A `publishedAt` or `occurredAt` in
   2099 counted as age 0. A date more than one day after `now` is now scored with
   `missingDateAgeDays`, like a missing date. Up to one day ahead (clock skew, a date-only
   stamp from a zone ahead of UTC) still counts as age 0.
 - **`composeDimensions` no longer presents a bare prior as measured.** A dimension with no
-  evidence (`confidence.level` `"insufficient"`, `score` equal to the prior) was averaged in
-  as if measured, and no positive weight returned `0`.
-- The explanation now includes the concentration sentence when both flags fire (it was
-  dropped when the uniformity sentence was present).
+  evidence (`score` equal to the prior) was averaged in as if measured, and no positive
+  weight returned `0`.
+- **Roundoff no longer decides a source count.** An effective count of
+  `1.9999999999999998` was floored, dropping a source type and flagging concentration.
+  Near-integer sums are snapped first.
+- **Overriding a shipped source type with a case variant works.**
+  `resolveAnonymousConfig({ sourceWeights: { Forum: 1 } })` threw because the default
+  `forum` was kept; an override key now replaces the default with the same normalized label.
+- The uniformity minimum counts effective observations, so a near-weightless third post no
+  longer opens the uniformity check on two real reviews.
+- The explanation now includes the concentration sentence when both flags fire.
 
 ### Changed (behavior)
 
@@ -58,34 +76,40 @@ These scores move on the example configuration. Anyone who stores, thresholds or
 
 - **Small anonymous corpora score lower.** With fewer than six eligible observations,
   `diversity` used to be inflated by the small count. Three reviews from three source types
-  (the README example) went from 83 to 71; two reviews from two source types from 84 to 68.
+  (the README example) went from 83 to 70; two reviews from two source types from 84 to 68.
 - **Single-source anonymous corpora of one or two observations are discounted.** One
   marketplace review went from 85 to 43 (`lowSourceCount: true`, `confidence` `"thin"`).
   It is as concentrated as thirty reviews from one source type, which were already
   discounted.
-- **Concentration is measured by weight share, not by label.** A second source type that
-  carries little weight earns proportionally little relief: 40 reviews on one marketplace
-  plus one blog mention went from 67 to 57, and a 30-post forum ring plus one real blog post
-  from 67 to 51. `sourceCount` is the effective count rounded down, so it can be lower than
-  the number of distinct labels (and `confidence.effectiveSampleSize` with it).
-  `lowSourceCount` is true exactly when the (now ramped) concentration discount is above 0.
-- **The uniformity discount is smaller near its thresholds.** Its maximum (`uniformPenalty`)
-  is reached only at a weighted mean of 1 with zero variance. `uniformSentiment` still fires
-  on the same thresholds, now on the weighted mean and variance.
+- **Source types count by their own weight.** One post with real weight on another platform
+  counts in full (a 30-post forum ring plus one real blog post still scores 67, as on
+  0.2.0); a faint one counts in proportion (five posts at confidence 0.12 on five other
+  platforms: 90 on 0.2.0, 60 now). `sourceCount` counts source types that reach half of the
+  full-count weight, so it can be lower than the number of distinct labels (and
+  `confidence.effectiveSampleSize` with it). `lowSourceCount` is true exactly when the
+  (ramped) concentration discount is above 0.
+- **The uniformity discount is smaller just past its mean threshold** (identical 0.86: 67 on
+  0.2.0, 78 now) and full from 0.05 past it. `uniformSentiment` fires on the same
+  thresholds, now on the weighted mean and variance, and from `minSignalsForUniformCheck`
+  effective observations.
 - **Future-dated evidence weighs less.** In `identified`, such a signal's `contributions`
   row has `ageDays: null`, and `signalAgeDays` returns `missingDateAgeDays` for it. In
   `anonymous`, the explanation adds "N observation(s) dated after the assessment time ... scored
   as undated."
-- **`composeDimensions` returns `number | null`.** It returns `null` when no dimension has a
-  positive weight (it returned `0`) or when any positively weighted dimension is
-  `"insufficient"`. It now reads each dimension's `confidence.level` and throws if it is
-  missing or unknown.
+- **`composeDimensions` returns `number | null` (breaking).** It leaves out positively
+  weighted dimensions that are `"insufficient"` or whose `nEff` is below 0.25, renormalizes
+  over the rest, and returns `null` only when no weighted dimension is measured (it
+  returned `0`). It now reads each dimension's `nEff` and `confidence.level` and throws if
+  either is missing or invalid.
+- **New: `composeDimensionsDetailed(scores, weights, options?)`** returns
+  `{ score, measured, unmeasured }`, with a `minEffectiveSampleSize` option.
 - A `sourceWeights` map with two keys that are the same source type after trimming and
   case-folding, with different weights, now throws `RangeError`.
-- Explanation text: `Few distinct source types relative to the number of observations; treat as uncertain.`
+- Explanation text: `from N distinct source types` is now `from N effective source types`,
+  and `Few distinct source types relative to the number of observations; treat as uncertain.`
   is now `The evidence spans few distinct source types; treat as uncertain.`
 - Unchanged: the `identified` score, `raw`, `nEff` and confidence for any dated-in-the-past or
-  undated evidence; the README `identified` example; every config field and export.
+  undated evidence; the README `identified` example; every config field.
 
 ### Documented
 
@@ -94,17 +118,26 @@ These scores move on the example configuration. Anyone who stores, thresholds or
   dividing the dial and the confidence thresholds by `k`. This is deliberate and now
   documented under "Weight scale" in the README, with a property test; making it
   scale-free would remove the meaning of "ten weak signals carry less than one strong one".
+- **When an anonymous score can drop**, exactly: adding an observation at or above the
+  weighted mean sentiment and at least as fresh as the corpus average never lowers
+  `trustScore`, from any source type, except by raising the uniformity discount.
 - `trustScore` is `null` with no evidence, and `null` is not sortable as a number: the doc
   comment used to say it could be sorted without a special case.
+- Observations are not deduplicated (`id` is never read); resubmitting a review counts it
+  twice.
 - Inputs are not rescaled: a 1-5 rating passed as a 0-100 `value`, or a `[0, 1]` model score
   passed as a `[-1, 1]` sentiment, is accepted and read on the wrong scale.
-- Honest limits now say plainly how easy the discounts are to clear: a few posts with real
-  weight on a second source type clear concentration, and one real dissenting review (or about
+- Honest limits say plainly how easy the discounts are to clear: one post with real weight
+  on each extra source type clears concentration, and one real dissenting review (or about
   1% of the weight far from the mean) clears uniformity. `trustScore` is not a sentiment
-  ranking: a discounted positive corpus can rank below a review bomb.
+  ranking: a discounted positive corpus can rank below a review bomb, and a single honest
+  post can score at or below a fully discounted single-platform set. Identical ratings are
+  discounted at any level past the threshold, so 40 identical 4.92-star ratings rank below
+  40 identical 4.60-star ones.
 - `src/verdict-table.test.ts` pins named review sets (organic, enthusiastic, mixed, ring, bot,
-  bomb, decoys, label variants, future dates) with their flags, ordering and confidence, plus
-  seeded property tests for monotonicity, order independence and weight scale.
+  bomb, decoys, label variants, future dates, both review rounds) with their flags,
+  ordering and confidence, plus seeded property tests for monotonicity, order independence
+  and weight scale. `api-surface.json` adds `composeDimensionsDetailed`.
 
 ## [0.2.1] - 2026-10-07
 

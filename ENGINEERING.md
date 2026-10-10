@@ -26,21 +26,28 @@
   observation whose effective weight (credibility x confidence x recency decay)
   is 0 (anonymous) contributes nothing to any output. With no eligible evidence,
   `confidence.level` is `"insufficient"` with a `reason`.
-- **Labels and shares (anonymous).** Source labels are compared trimmed and
-  case-folded. A source type counts toward the effective source count in full
-  from a 5% share of the total effective weight and in proportion below it, so
-  a near-weightless observation cannot add a source type.
-- **Confirming evidence (anonymous).** A confirming observation (sentiment at
-  or above the weighted mean, published at `now`) never lowers `trustScore`
-  except through a visible pattern signal: a larger `astroturfPenalty` or a
-  smaller `volume`. No discount switches on at a cliff: concentration ramps
-  over one source type, uniformity ramps quadratically from its thresholds.
-  The positive composite is capped at 1 before the discount is subtracted.
+- **Labels and source counts (anonymous).** Source labels are compared
+  trimmed and case-folded, in signals and in `sourceWeights` (an override key
+  replaces a default with the same normalized label). A source type counts in
+  full once its own effective weight reaches the full-count weight (half the
+  largest configured credibility) and in proportion below it, so a
+  near-weightless observation cannot add a source type and evidence added to
+  one source type never makes another count for less. Near-integer sums are
+  snapped before they decide a count or threshold.
+- **Confirming evidence (anonymous).** An observation with sentiment at or
+  above the weighted mean that is at least as fresh as the corpus average
+  (e.g. published at `now`), from any source type, never lowers `trustScore`
+  except by raising the uniformity discount. No discount switches on at a
+  cliff: concentration ramps over one source type; uniformity ramps linearly
+  over 0.05 of mean and quadratically in variance. The positive composite is
+  capped at 1 before the discount is subtracted.
 - **Future dates fail closed.** A timestamp more than one day after `now` is
   scored as undated (`missingDateAgeDays`), never as perfectly fresh.
-- **No bare prior as a measurement.** `composeDimensions` returns `null` when
-  no dimension has a positive weight or a weighted dimension is
-  `"insufficient"`.
+- **No bare prior as a measurement.** `composeDimensions` leaves out
+  positively weighted dimensions that are `"insufficient"` or below the
+  minimum `nEff` (0.25 by default), renormalizes over the rest, and returns
+  `null` only when nothing is measured; `composeDimensionsDetailed` lists
+  which dimensions were left out.
 - **Verdict table.** `src/verdict-table.test.ts` pins named review sets
   (flags, ordering, confidence) on the example configs. A change that moves a
   verdict updates that table and the CHANGELOG together.
