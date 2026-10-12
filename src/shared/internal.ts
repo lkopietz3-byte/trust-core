@@ -259,6 +259,28 @@ export function deepFreeze<T>(value: T): T {
 }
 
 // ---------------------------------------------------------------------------
+// Ages of dated evidence
+// ---------------------------------------------------------------------------
+
+/**
+ * How far after `now` a timestamp may fall and still count as "just now":
+ * one day, which covers clock skew and a date-only stamp written in a time
+ * zone ahead of UTC.
+ */
+export const FUTURE_SKEW_TOLERANCE_DAYS = 1;
+
+/**
+ * The age to score for a timestamp `rawAgeDays` old (negative means after
+ * `now`). Up to {@link FUTURE_SKEW_TOLERANCE_DAYS} ahead counts as age 0.
+ * Anything further ahead is not usable as a date and returns `null`, so the
+ * caller treats it like a missing date instead of giving it full recency.
+ */
+export function usableAgeDays(rawAgeDays: number): number | null {
+  if (rawAgeDays < -FUTURE_SKEW_TOLERANCE_DAYS) return null;
+  return Math.max(0, rawAgeDays);
+}
+
+// ---------------------------------------------------------------------------
 // Clock readings: a strict ISO 8601 string, or a `Date`
 // ---------------------------------------------------------------------------
 

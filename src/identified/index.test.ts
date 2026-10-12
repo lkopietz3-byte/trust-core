@@ -179,9 +179,9 @@ describe("composeDimensions", () => {
     expect(composite).toBeCloseTo(expected, 10);
   });
 
-  it("returns 0 when no dimension has a positive weight", () => {
+  it("returns null, not 0, when no dimension has a positive weight", () => {
     const quality = scoreEntity([signal()], config, { now: NOW, prior: 50 });
-    expect(composeDimensions({ quality }, {})).toBe(0);
+    expect(composeDimensions({ quality }, {})).toBeNull();
   });
 
   it("treats a prototype-chain dimension key as absent instead of corrupting the composite", () => {

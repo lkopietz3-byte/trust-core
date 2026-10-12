@@ -1,4 +1,4 @@
-# trust-core — agent instructions
+# trust-core: agent instructions
 
 Deterministic entity-trust scoring: weight known contributors' signals, and gauge how organic anonymous sentiment looks. Zero runtime dependencies.
 

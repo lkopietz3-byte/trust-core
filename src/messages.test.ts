@@ -132,7 +132,7 @@ const identifiedRows: [string, () => unknown, string][] = [
   ],
   [
     "composeDimensions overflow",
-    () => composeDimensions({ a: { ...score([]), score: 100 } }, { a: Number.MAX_VALUE }),
+    () => composeDimensions({ a: { ...score([idSignal()]), score: 100 } }, { a: Number.MAX_VALUE }),
     'weighted score of dimension "a" is not a finite number',
   ],
 ];

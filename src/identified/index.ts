@@ -53,6 +53,7 @@ import {
   show,
   snapshotArray,
   snapshotWeightMap,
+  usableAgeDays,
 } from "../shared/internal.js";
 
 export { TRUST_DIALS, type TrustDial, type TrustDialPreset } from "../shared/types.js";
@@ -251,18 +252,32 @@ export function reputationFactor(reputation: number | null, curve: ReputationCur
 }
 
 /**
- * Age in days of a signal's `occurredAt`, falling back to a configured age
- * when unknown.
+ * Age in days of a signal's `occurredAt`, falling back to the configured
+ * `missingDateAgeDays` when there is no usable date. A date up to one day
+ * after `asOf` (clock skew, or a date-only stamp from a zone ahead of UTC)
+ * counts as age 0. A date further in the future is not usable: it gets the
+ * missing-date age, never full recency, so a mistyped or forged future date
+ * cannot make a signal look perfectly fresh.
  *
  * @throws TypeError if `occurredAt` (when not `null`) or `asOf` is not a
  *   valid ISO 8601 timestamp (an invalid one would otherwise silently
  *   produce a `NaN` age via `Date.parse`).
  */
 export function signalAgeDays(occurredAt: string | null, asOf: string, recency: RecencyCurve): number {
+  return usableSignalAge(occurredAt, asOf, recency.missingDateAgeDays).age;
+}
+
+/** The scored age, and whether it came from a usable date (not missing, not in the future). */
+function usableSignalAge(
+  occurredAt: string | null,
+  asOf: string,
+  missingDateAgeDays: number,
+): { age: number; dated: boolean } {
   checkTimestamp(asOf, "asOf");
-  if (occurredAt === null) return recency.missingDateAgeDays;
+  if (occurredAt === null) return { age: missingDateAgeDays, dated: false };
   checkTimestamp(occurredAt, "occurredAt");
-  return Math.max(0, daysBetween(occurredAt, asOf));
+  const age = usableAgeDays(daysBetween(occurredAt, asOf));
+  return age === null ? { age: missingDateAgeDays, dated: false } : { age, dated: true };
 }
 
 /**
@@ -299,11 +314,11 @@ function evaluateSignal(
   const source = lookupWeight(config.sourceWeights, signal.source, "source");
   const proof = lookupWeight(config.proofWeights, signal.proof, "proof");
   const reputation = reputationFactor(signal.reputation, config.reputation);
-  const age = signalAgeDays(signal.occurredAt, asOf, config.recency);
+  const { age, dated } = usableSignalAge(signal.occurredAt, asOf, config.recency.missingDateAgeDays);
   const recency = recencyDecay(age, config.recency.halfLifeDays);
   return {
     weight: assertFinite(tier * source * proof * reputation * recency, `weight of signal ${show(signal.id)}`),
-    ageDays: signal.occurredAt === null ? null : age,
+    ageDays: dated ? age : null,
   };
 }
 
@@ -344,7 +359,7 @@ export interface SignalContribution {
   proof: string;
   /** The signal's final weight: tier x source x proof x reputation x recency. `0` means it counted for nothing. */
   weight: Weight;
-  /** Age in days at `now`, or `null` when the signal had no `occurredAt`. */
+  /** Age in days at `now`, or `null` when the signal had no usable date: no `occurredAt`, or one more than a day after `now` (scored with `missingDateAgeDays`). */
   ageDays: number | null;
 }
 
@@ -356,7 +371,11 @@ export interface EntityScore {
   raw: number | null;
   /** The baseline the score was shrunk toward, as passed in. */
   prior: number;
-  /** Effective sample size — sum of signal weights, not a raw count. */
+  /**
+   * Effective sample size — sum of signal weights, not a raw count. Weights are
+   * on an absolute scale where 1.0 is one reference signal, so scaling every
+   * configured weight by `k` scales `nEff` by `k` (see README, "Weight scale").
+   */
   nEff: number;
   /** How many signals were submitted (including any that carried zero weight). */
   signalCount: number;
@@ -474,34 +493,152 @@ export function scoreEntity(
   };
 }
 
+const CONFIDENCE_LEVELS: readonly string[] = ["high", "moderate", "thin", "insufficient"];
+
+/**
+ * The default evidence level at which a dimension carries its full weight in
+ * {@link composeDimensions}: a quarter of one reference (weight 1.0) signal.
+ * Below it, a dimension's weight is scaled down in proportion to its `nEff`,
+ * because its score is mostly its prior.
+ */
+const DEFAULT_MIN_DIMENSION_EVIDENCE = 0.25;
+
+/** Options for {@link composeDimensionsDetailed}. */
+export interface ComposeDimensionsOptions {
+  /**
+   * The `nEff` at which a positively weighted dimension carries its full
+   * weight. Below it, the dimension's weight is multiplied by
+   * `nEff / minEffectiveSampleSize`, so a dimension that is mostly prior
+   * counts for little and its influence grows smoothly as evidence arrives (no
+   * cliff). A finite number `>= 0`; defaults to 0.25, a quarter of one
+   * reference signal. `0` turns the scaling off. A dimension whose
+   * `confidence.level` is `"insufficient"` (nEff 0) always gets weight 0.
+   */
+  minEffectiveSampleSize?: number;
+}
+
+/** The result of {@link composeDimensionsDetailed}. */
+export interface ComposedDimensions {
+  /** Weighted average over the measured dimensions, or `null` when none is measured. */
+  score: number | null;
+  /** Positively weighted dimensions that carry some weight in `score` (any evidence at all), sorted by name. */
+  measured: string[];
+  /** Positively weighted dimensions that carry weight 0 after scaling (no evidence: `"insufficient"` or nEff 0, or a scaled weight too small to represent), sorted by name. Dimensions with no positive weight are in neither list. `score` is `null` exactly when `measured` is empty. */
+  unmeasured: string[];
+}
+
+const COMPOSE_OPTION_KEYS = ["minEffectiveSampleSize"] as const;
+
+const byName = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 /**
  * Combine several already-scored dimensions (e.g. quality, reliability,
- * communication) into one composite using caller-supplied weights.
- * Dimensions with a missing or non-positive weight are excluded. Returns 0
- * if no dimension has a positive weight. `weights` is looked up with
- * `Object.hasOwn` so a prototype-chain dimension name is treated as missing
- * (weight 0) rather than resolving to an inherited, non-numeric value.
+ * communication) into one composite using caller-supplied weights, and say
+ * which dimensions were measured. Dimensions with a missing or non-positive
+ * weight are excluded. Each positively weighted dimension's weight is scaled
+ * by `min(1, nEff / minEffectiveSampleSize)` (default 0.25), so a dimension
+ * whose score is mostly its prior counts for little, and an **unmeasured**
+ * one (`confidence.level` `"insufficient"`, nEff 0) counts for nothing: a bare
+ * prior is never averaged in as a measurement. The scaled weights are
+ * renormalized; `score` is `null` only when no dimension is measured. Handle
+ * `null` before sorting or comparing (JavaScript's `<` and `-` treat it as `0`).
  *
- * @throws TypeError if `scores` or `weights` is not a plain object.
- * @throws RangeError if a weight present in `weights` is `NaN` or infinite.
+ * Leaving a dimension out changes what the composite averages, so a vendor
+ * with no reliability data is scored on quality alone and can outrank one
+ * whose reliability was measured as mediocre. Compare composites with
+ * `unmeasured` in view.
+ *
+ * `weights` is looked up with `Object.hasOwn`, so a prototype-chain dimension
+ * name is treated as missing (weight 0).
+ *
+ * @throws TypeError if `scores`, `weights` or `options` is not a plain object
+ *   (`options` may be `undefined`), `options` has an unknown key, or a dimension
+ *   is not an object with a `confidence` object whose `level` is a string.
+ * @throws RangeError if a weight present in `weights` is `NaN` or infinite, a
+ *   dimension's `score` is not in `[0, 100]`, its `nEff` is not a finite number
+ *   `>= 0`, its `confidence.level` is not a known level, or
+ *   `minEffectiveSampleSize` is not a finite number `>= 0`.
  */
-export function composeDimensions(
+export function composeDimensionsDetailed(
   scores: Record<string, EntityScore>,
   weights: Record<string, number>,
-): number {
+  options?: ComposeDimensionsOptions,
+): ComposedDimensions {
   checkPlainRecord(scores, "scores");
   checkPlainRecord(weights, "weights");
-  const numerators: number[] = [];
-  const denominators: number[] = [];
+  let minEvidence = DEFAULT_MIN_DIMENSION_EVIDENCE;
+  if (options !== undefined) {
+    const record = checkPlainRecord(options, "options");
+    rejectUnknownKeys(record, COMPOSE_OPTION_KEYS, "options");
+    const { minEffectiveSampleSize } = record;
+    if (minEffectiveSampleSize !== undefined) {
+      minEvidence = checkNumber(minEffectiveSampleSize, "options.minEffectiveSampleSize", { min: 0 });
+    }
+  }
+  const candidates: { key: string; w: number; coverage: number; score: number }[] = [];
+  const unmeasured: string[] = [];
+  let maxWeight = 0;
   for (const [key, entry] of Object.entries(scores)) {
     const w = hasOwn(weights, key) ? weights[key]! : 0;
     checkNumber(w, `weights[${show(key)}]`, {});
     const dimension = checkRecord(entry, `scores[${show(key)}]`);
     const dimensionScore = checkNumber(dimension.score, `scores[${show(key)}].score`, { min: 0, max: 100 });
+    const nEff = checkNumber(dimension.nEff, `scores[${show(key)}].nEff`, { min: 0 });
+    const { level } = checkRecord(dimension.confidence, `scores[${show(key)}].confidence`);
+    if (typeof level !== "string") {
+      throw new TypeError(`scores[${show(key)}].confidence.level must be a string (got ${show(level)})`);
+    }
+    if (!CONFIDENCE_LEVELS.includes(level)) {
+      throw new RangeError(
+        `scores[${show(key)}].confidence.level must be one of ${CONFIDENCE_LEVELS.join(", ")} (got ${show(level)})`,
+      );
+    }
     if (w <= 0) continue;
-    numerators.push(assertFinite(w * dimensionScore, `weighted score of dimension ${show(key)}`));
-    denominators.push(w);
+    const coverage = level === "insufficient" || nEff === 0 ? 0 : minEvidence > 0 ? Math.min(1, nEff / minEvidence) : 1;
+    if (coverage === 0) {
+      unmeasured.push(key);
+      continue;
+    }
+    assertFinite(w * dimensionScore, `weighted score of dimension ${show(key)}`);
+    candidates.push({ key, w, coverage, score: dimensionScore });
+    if (w > maxWeight) maxWeight = w;
+  }
+  // Weights are divided by the largest one before coverage is applied, so a
+  // tiny positive weight does not underflow to 0. One that still scales to 0
+  // carries no weight and is reported as unmeasured, so `score` is null
+  // exactly when `measured` is empty.
+  const numerators: number[] = [];
+  const denominators: number[] = [];
+  const measured: string[] = [];
+  for (const { key, w, coverage, score } of candidates) {
+    const scaled = (w / maxWeight) * coverage;
+    if (!(scaled > 0)) {
+      unmeasured.push(key);
+      continue;
+    }
+    measured.push(key);
+    numerators.push(scaled * score);
+    denominators.push(scaled);
   }
   const den = exactSum(denominators);
-  return den > 0 ? clamp(exactSum(numerators) / den, 0, 100) : 0;
+  return {
+    score: den > 0 ? clamp(exactSum(numerators) / den, 0, 100) : null,
+    measured: measured.sort(byName),
+    unmeasured: unmeasured.sort(byName),
+  };
+}
+
+/**
+ * The composite score of {@link composeDimensionsDetailed} with default
+ * options: a weighted average over the measured dimensions, or `null` when no
+ * positively weighted dimension is measured. Use the detailed form to see
+ * which dimensions were left out.
+ *
+ * @throws See {@link composeDimensionsDetailed}.
+ */
+export function composeDimensions(
+  scores: Record<string, EntityScore>,
+  weights: Record<string, number>,
+): number | null {
+  return composeDimensionsDetailed(scores, weights).score;
 }
