@@ -8,11 +8,41 @@ makes a previously accepted input throw or return a different result bumps the m
 
 ## [Unreleased]
 
+## [0.3.0] - unreleased
+
 A fix pass from a verdict hunt on realistic review sets, plus three rounds of independent
 review. Anonymous scores change for many corpora, `composeDimensions` returns
-`number | null`, and future-dated evidence is scored differently. `composeDimensions`'s
-return type is a breaking API change, so **the next release must be 0.3.0**. Not released
-yet.
+`number | null`, and future-dated evidence is scored differently. Not published yet.
+
+### Breaking changes
+
+Each item says what to do when you upgrade from 0.2.1.
+
+- **`composeDimensions` returns `number | null` (was `number`, with `0` for no data).**
+  Migration: handle `null` before you compare, sort or display; use
+  `composeDimensionsDetailed` if you need to know which dimensions were measured.
+- **`composeDimensions` throws if a dimension lacks `nEff` or `confidence.level`.**
+  Migration: pass the `EntityScore` objects that `scoreEntity` returned, unmodified.
+- **Anonymous `trustScore` moves for many corpora** (small corpora lower, single-source
+  corpora of one or two observations discounted, uniformity smoother). Migration: re-run any
+  stored scores, re-check any threshold or ranking built on them, and compare against
+  `src/verdict-table.test.ts` for your case.
+- **Source labels are compared trimmed and case-folded.** Labels that were unlisted (weight
+  0) because of case or spacing now count. Migration: check that `"Forum"` and `" forum"`
+  in your data are meant to be the same source type.
+- **A `sourceWeights` map with two keys that are the same label after trimming and
+  case-folding, with different weights, throws `RangeError`.** Migration: keep one key per
+  source type.
+- **`sourceCount` (and `confidence.effectiveSampleSize` with it) counts source types that
+  reach half of the new `fullCountWeight`, so it can be lower than the number of distinct
+  labels.** Migration: if you read `sourceCount` as a label count, count labels yourself;
+  otherwise set `fullCountWeight` on the scale of your `sourceWeights`.
+- **Future-dated evidence (more than one day after `now`) is scored as undated.** In
+  `identified` its `contributions` row has `ageDays: null` and `signalAgeDays` returns
+  `missingDateAgeDays`. Migration: fix wrong dates or the clock you pass as `now`.
+- **Explanation text changed** (`from N effective source types`, a new few-source-types
+  sentence, a future-date sentence). Migration: read `flags` and `components`, not the
+  prose.
 
 ### Fixed
 
@@ -160,6 +190,11 @@ These scores move on the example configuration. Anyone who stores, thresholds or
   post can score at or below a fully discounted single-platform set. Identical ratings are
   discounted at any level past the threshold, so 40 identical 4.92-star ratings rank below
   40 identical 4.60-star ones.
+- The README opening now says plainly that `anonymous` is not a fake-review detector and that
+  `identified` is the solid part, with field-trial numbers and measured examples under Honest
+  limits: a ring can gain from one planted complaint (70 to 81 on the example configuration),
+  a genuine perfect record trips the same flag as a ring, and `identified` returns the prior for
+  an entity with no evidence, so check `confidence.level` before ranking.
 - `src/verdict-table.test.ts` pins named review sets (organic, enthusiastic, mixed, ring, bot,
   bomb, decoys, label variants, future dates, both review rounds) with their flags,
   ordering and confidence, plus seeded property tests for monotonicity, order independence
@@ -225,7 +260,7 @@ are labeled TC-nnn (the external audit) or by bug class (the internal sweep).
   `assessAuthenticity().explanation`:
   - `Trust 83/100 across 3 independent sources.` is now
     `Heuristic score 83/100 from 3 distinct source types (independence not verified).`
-  - `Evidence leans on very few sources — treat as provisional.` is now
+  - `Evidence leans on very few sources, treat as provisional.` is now
     `Few distinct source types relative to the number of observations; treat as uncertain.`
   - `Most evidence is dated.` is now
     `Recency is low given the publication dates supplied; observations without a date use the configured default age.`
@@ -266,14 +301,14 @@ are labeled TC-nnn (the external audit) or by bug class (the internal sweep).
 First release. Deterministic, zero-runtime-dependency TypeScript scoring
 primitives for entity trust:
 
-- `identified` — score entities from known, identified contributors: a
+- `identified`: score entities from known, identified contributors: a
   credibility-weighted mean (tier x source x proof x reputation x recency),
   shrunk toward a caller-supplied domain baseline (`prior`) by a configurable
   dial, with a confidence label derived from the effective sample size.
-- `anonymous` — assess how authentic a corpus of unattributed signals looks,
+- `anonymous`: assess how authentic a corpus of unattributed signals looks,
   from source diversity, volume, recency, and consensus, discounted when the
   evidence looks concentrated in too few sources or suspiciously uniform.
-- `shared` — the weight, recency-decay, shrinkage, and confidence primitives
+- `shared`: the weight, recency-decay, shrinkage, and confidence primitives
   both modules are built from.
 - Every public function validates its inputs and throws a `TypeError` or
   `RangeError` on a malformed value (out of range, wrong type, `NaN`,
@@ -287,7 +322,7 @@ primitives for entity trust:
   are deep-frozen, and every config `resolveIdentifiedConfig`/
   `resolveAnonymousConfig` returns is frozen too.
 - CommonJS `require("trust-core")` works alongside `import`, on Node
-  20.19+/22.12+ (`require(esm)` support) — `exports` adds a `default`
+  20.19+/22.12+ (`require(esm)` support): `exports` adds a `default`
   condition next to `import` for every entry point.
 - `identified.scoreEntity`'s and `anonymous.assessAuthenticity`'s clock
   option is named `now` on both (previously `asOf` on `identified`), and

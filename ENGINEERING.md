@@ -3,7 +3,7 @@
 ## Invariants
 
 - **Range.** `identified.scoreEntity`'s `score`/`raw` and `anonymous.assessAuthenticity`'s
-  `trustScore` always stay within their documented `[0, 100]` range — validated
+  `trustScore` always stay within their documented `[0, 100]` range, validated
   inputs plus a final `clamp` as a floating-point safety net.
 - **Determinism.** Every exported function is pure: no `Date.now()`, no
   `Math.random()`, no I/O. The same inputs always produce the same output.
@@ -85,7 +85,7 @@ unproven equivalents, not as proven ones.
 
 This is an ESM package; `exports`' `default` condition also lets plain
 CommonJS `require("trust-core")` work, on Node 20.19+/22.12+ (`require(esm)`
-support — see README). `typesVersions` maps the `identified`, `anonymous` and `shared` subpaths for
+support, see README). `typesVersions` maps the `identified`, `anonymous` and `shared` subpaths for
 legacy `moduleResolution: node` (node10). `.js.map` files ship with `inlineSources` so
 go-to-definition resolves without `src/` in the tarball; `.d.ts.map` is
 turned off (`declarationMap: false`) for the same reason, rather than shipping
@@ -96,14 +96,17 @@ turned off (`declarationMap: false`) for the same reason, rather than shipping
 - Neither module verifies that any underlying claim, review, or event is
   true. `identified` weights the credibility of supplied signals; `anonymous`
   scores how organic a sentiment pattern looks. Neither is a truth or fraud
-  detector — see README's "Honest limits".
+  detector, see README's "Honest limits".
 - The astroturf heuristics catch two specific statistical shapes
   (source concentration, near-uniform sentiment). A campaign that varies its
   wording and sentiment is not guaranteed to be caught.
 - Config validation catches malformed configuration; it cannot catch
   well-formed configuration that is simply wrong for your domain (a bad
   `prior`, miscalibrated weights).
-- Cross-entity/cross-contributor correlation (e.g. sockpuppet rings) is out of scope — both modules score one entity's corpus at a time.
+- `anonymous` is not a fake-review detector. In field trials a ring spread over several source
+  types, or one that copies an honest platform mix, often scored at or above honest evidence.
+  `identified` is the dependable half, and only for contributors whose attributes you trust.
+- Cross-entity/cross-contributor correlation (e.g. sockpuppet rings) is out of scope, because both modules score one entity's corpus at a time.
 
 ## Are the types wrong? (attw)
 
@@ -111,7 +114,7 @@ CI runs [`arethetypeswrong`](https://github.com/arethetypeswrong/arethetypeswron
 (`npm run attw`, which is `attw --pack . --ignore-rules cjs-resolves-to-esm --profile node16`)
 against the packed tarball after the build step. The `cjs-resolves-to-esm` rule is ignored on
 purpose: this is an ESM-only package (`"type": "module"`, no `require` entry point), so a
-CommonJS consumer must use Node's `require(esm)` support (Node >=20.19 or >=22.12 — see
+CommonJS consumer must use Node's `require(esm)` support (Node >=20.19 or >=22.12, see
 "Runtime support policy" below) rather than a native `require`. A dual CJS+ESM build was
 rejected to avoid the dual-package hazard (two separately-identified copies of the same module,
 with broken `instanceof` checks and duplicated module state across the CJS and ESM entry
@@ -132,7 +135,7 @@ accident. To release: add a dated entry to `CHANGELOG.md`, bump `version` in
 
 npm's unpublish policy is deliberately narrow. Within 72 hours of publishing, a version can be
 unpublished only if no other published package depends on it. After 72 hours, unpublishing also
-requires fewer than 300 downloads in the last week and a single maintainer — most released
+requires fewer than 300 downloads in the last week and a single maintainer, so most released
 versions won't qualify either way. A given `name@version` can never be reused, published or
 not, even after an unpublish. Treat unpublish as unavailable: prefer fixing forward with a new
 patch version, and use `npm deprecate <name>@"<range>" "<message>"` to warn consumers off a
@@ -145,7 +148,7 @@ result bumps the MINOR version (0.1.0 to 0.2.0); from 1.0 it requires a major bu
 ### Runtime support policy
 
 - **Supported (recommended for production):** Node 22 and 24 LTS; Node 26 current.
-- **Compatibility-tested:** Node 20. Node 20 is end-of-life — nodejs.org's release page
+- **Compatibility-tested:** Node 20. Node 20 is end-of-life: nodejs.org's release page
   (<https://nodejs.org/en/about/previous-releases>) lists it as `EOL`, with its final release
   dated Mar 24, 2026. The `compat` job in `verify.yml` still runs on Node 20.19.0 to catch
   regressions, but that runtime gets no security fixes upstream; don't run production traffic
