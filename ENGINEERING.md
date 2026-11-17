@@ -103,8 +103,10 @@ turned off (`declarationMap: false`) for the same reason, rather than shipping
 - Config validation catches malformed configuration; it cannot catch
   well-formed configuration that is simply wrong for your domain (a bad
   `prior`, miscalibrated weights).
-- `anonymous` is not a fake-review detector. In field trials a ring spread over several source
-  types, or one that copies an honest platform mix, often scored at or above honest evidence.
+- `anonymous` is not a fake-review detector. A ring spread over several source types, or one
+  that copies an honest platform mix, can score at or above honest evidence (worked examples in
+  the README, pinned in `src/verdict-table.test.ts`). An unpublished internal trial agreed; its
+  data is not in this repo.
   `identified` is the dependable half, and only for contributors whose attributes you trust.
 - Cross-entity/cross-contributor correlation (e.g. sockpuppet rings) is out of scope, because both modules score one entity's corpus at a time.
 

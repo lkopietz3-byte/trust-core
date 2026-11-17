@@ -4,7 +4,6 @@ Deterministic entity-trust scoring: weight known contributors' signals, and gaug
 
 ## Read first
 - `ENGINEERING.md` holds this package's invariants and design rules; read it before changing behavior.
-- `PROJECT_CONTEXT.md` is the current project state and decisions.
 - `SECURITY.md` covers the security posture; follow it for anything touching input handling.
 
 ## Commands (from package.json)
@@ -23,12 +22,7 @@ Deterministic entity-trust scoring: weight known contributors' signals, and gaug
 - Runtime `dependencies` stay empty; add dev tooling only.
 - Keep unrelated uncommitted work intact; never stage or reset the whole tree.
 
-## Review preparation
-
-Use [docs/REVIEW_READINESS.md](docs/REVIEW_READINESS.md) for milestone review cadence and launch-preparation evidence.
-
-
-## Code Review Rules
+## Review notes
 
 - Preserve deterministic scoring with explicit time, stable order/summation and finite bounded outputs. Only `undefined` may select documented configuration defaults; malformed input must throw rather than produce a plausible score.
 - Keep claims bounded to the actual heuristic and caller-supplied credibility/source labels. Statistical patterns do not verify truth, identity, independence or fraud; domain calibration remains the caller's responsibility.

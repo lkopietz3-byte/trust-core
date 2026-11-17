@@ -191,8 +191,8 @@ These scores move on the example configuration. Anyone who stores, thresholds or
   discounted at any level past the threshold, so 40 identical 4.92-star ratings rank below
   40 identical 4.60-star ones.
 - The README opening now says plainly that `anonymous` is not a fake-review detector and that
-  `identified` is the solid part, with field-trial numbers and measured examples under Honest
-  limits: a ring can gain from one planted complaint (70 to 81 on the example configuration),
+  `identified` is the solid part, with measured examples under Honest
+  limits: a ring can gain from one planted complaint (70 to 82 on the example configuration),
   a genuine perfect record trips the same flag as a ring, and `identified` returns the prior for
   an entity with no evidence, so check `confidence.level` before ranking.
 - `src/verdict-table.test.ts` pins named review sets (organic, enthusiastic, mixed, ring, bot,

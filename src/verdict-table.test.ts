@@ -313,6 +313,34 @@ describe("verdict table: known limits (documented in README, Honest limits)", ()
     expect(lowWeightDissent.flags.uniformSentiment).toBe(false);
   });
 
+  // The worked examples in the README's Honest limits. The README states these
+  // numbers; if one moves, change the README and CHANGELOG in the same commit.
+  describe("README worked examples (Honest limits)", () => {
+    const at = (source: string, sentiment: number, i: number) => obs(source, sentiment, { publishedAt: daysAgo(i % 14) });
+    const ring = Array.from({ length: 20 }, (_, i) => at(FOUR[i % 4] as string, 1, i));
+    const perfect = Array.from({ length: 20 }, (_, i) => at(["forum", "marketplace", "blog"][i % 3] as string, 1, i));
+    const honestSingle = Array.from({ length: 20 }, (_, i) => at("forum", i % 2 === 0 ? 1 : 0, i));
+    const complaint = () => obs("forum", -1);
+
+    it("a ring scores 70 and gains from one planted complaint (82)", () => {
+      expect(score(ring)).toBe(70);
+      expect(assess(ring).flags.uniformSentiment).toBe(true);
+      expect(score([...ring, complaint()])).toBe(82);
+    });
+
+    it("an honest single-platform set with mixed opinions scores 33 (thin), below the ring", () => {
+      expect(score(honestSingle)).toBe(33);
+      expect(assess(honestSingle).confidence.level).toBe("thin");
+      expect(score(honestSingle)).toBeLessThan(score(ring));
+    });
+
+    it("a genuine perfect record trips the same flag as a ring (64), and one real complaint lifts it (76)", () => {
+      expect(score(perfect)).toBe(64);
+      expect(assess(perfect).flags.uniformSentiment).toBe(true);
+      expect(score([...perfect, complaint()])).toBe(76);
+    });
+  });
+
   it("identical sentiment at or below the uniformity mean threshold is not discounted", () => {
     const flat = assess(Array.from({ length: 20 }, (_, i) => obs(FOUR[i % 4] as string, 0.85, { publishedAt: daysAgo(i % 14) })));
     expect(flat.flags.uniformSentiment).toBe(false);
