@@ -8,7 +8,7 @@ makes a previously accepted input throw or return a different result bumps the m
 
 ## [Unreleased]
 
-## [0.3.0] - unreleased
+## [0.3.0] - 2026-10-12
 
 A fix pass from a verdict hunt on realistic review sets, plus three rounds of independent
 review. Anonymous scores change for many corpora, `composeDimensions` returns
