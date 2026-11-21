@@ -4,7 +4,7 @@
 
 Two lenses on entity trust, and they are not equally strong.
 
-- **`identified` is the solid part.** If you already know your contributors (account tier, source, proof, reputation, date), it gives an auditable, deterministic score that is pulled toward a baseline when evidence is thin, so one rave from a new account or an item with a single review cannot top a list. It is built for small marketplaces, directories and internal leaderboards, and you supply the taxonomy, weights and baseline.
+- **`identified` is the solid part.** If you already know your contributors (account tier, source, proof, reputation, date), it gives an auditable, deterministic score that is pulled toward a baseline when evidence is thin, so a single review moves the score less when it carries little weight. It is built for small marketplaces, directories and internal leaderboards, and you supply the taxonomy, weights and baseline.
 - **`anonymous` is not a fake-review detector.** It describes how spread out and varied a pile of unattributed sentiment looks, and nothing else. A ring that copies an honest platform mix can score above an honest review set, and the two flags will miss rings that vary their wording and spread over several platforms; the worked examples under Honest limits show this on inputs you can run. (An internal field trial on public hotel-review data pointed the same way. Its data and script are not in this repo, so it is not cited as evidence here.) Treat its output as a pattern note for a human to look at, never as a ranking, a filter or a verdict.
 
 Zero runtime dependencies, ESM, framework-agnostic TypeScript. These are configurable weighted-average heuristics over the signals you supply, not a truth detector, a fraud detector, or a certification. See **Honest limits** below before you rely on either module for something adversarial.
@@ -32,7 +32,7 @@ A real product may need both halves at once. It can weight signals from known re
 npm install trust-core
 ```
 
-Or build from source: clone the repository and run `npm install && npm run build`. This README describes 0.3.0; scores and `composeDimensions` differ from 0.2.1, so read **Breaking changes** under 0.3.0 in [CHANGELOG.md](CHANGELOG.md) before you upgrade.
+Or build from source: clone the repository and run `npm install && npm run build`. This README describes 0.3.1 (the same behavior as 0.3.0); scores and `composeDimensions` differ from 0.2.1, so read **Breaking changes** under 0.3.0 in [CHANGELOG.md](CHANGELOG.md) before you upgrade.
 
 This is an ESM package (`"type": "module"`). ESM and CommonJS consumers work like this:
 

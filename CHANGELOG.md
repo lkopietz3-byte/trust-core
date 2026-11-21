@@ -8,11 +8,21 @@ makes a previously accepted input throw or return a different result bumps the m
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-20
+
+Documentation only. The package code and API are the same as 0.3.0.
+
+### Changed
+
+- The packaged CHANGELOG dates every release. The 0.3.0 package listed its own version as unreleased, and the 0.3.0 entry no longer says it was not published.
+- The README says how a low-weight review affects a score and labels figures whose data is not in the repository.
+- The package description names the two patterns the anonymous check flags.
+
 ## [0.3.0] - 2026-10-12
 
 A fix pass from a verdict hunt on realistic review sets, plus three rounds of independent
 review. Anonymous scores change for many corpora, `composeDimensions` returns
-`number | null`, and future-dated evidence is scored differently. Not published yet.
+`number | null`, and future-dated evidence is scored differently.
 
 ### Breaking changes
 

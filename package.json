@@ -1,7 +1,7 @@
 {
   "name": "trust-core",
-  "version": "0.3.0",
-  "description": "Deterministic entity-trust scoring: weight known contributors' signals, and gauge how organic anonymous sentiment looks. Zero runtime dependencies.",
+  "version": "0.3.1",
+  "description": "Weigh reviews using what you know about the reviewers. Flag anonymous reviews from too few source types or with unusually uniform praise.",
   "keywords": [
     "trust",
     "scoring",
